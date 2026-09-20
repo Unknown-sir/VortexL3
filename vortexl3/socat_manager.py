@@ -1,5 +1,5 @@
 """
-VortexL2 Socat Port Forwarding Manager
+VortexL3 Socat Port Forwarding Manager
 
 Manages simple TCP port forwarding using socat.
 Each port gets its own socat process.
@@ -10,7 +10,7 @@ import subprocess
 import re
 import asyncio
 from typing import List, Dict, Tuple, Optional
-from vortexl2.config import ConfigManager
+from vortexl3.config import ConfigManager
 
 
 def run_command(cmd: str) -> Tuple[bool, str, str]:
@@ -68,7 +68,7 @@ class SocatManager:
 
     def _get_service_name(self, port: int) -> str:
         """Get systemd service name for a port."""
-        return f"vortexl2-socat-{port}"
+        return f"vortexl3-socat-{port}"
     
     def _get_service_path(self, port: int) -> str:
         """Get systemd service file path."""
@@ -84,9 +84,9 @@ class SocatManager:
             f"TCP:{remote_ip}:{remote_port},keepalive,tcp-keepidle=60,tcp-keepintvl=10,tcp-keepcnt=3"
         )
         service_content = f"""[Unit]
-Description=VortexL2 Socat Port Forward {local_port}
+Description=VortexL3 Socat Port Forward {local_port}
 After=network.target
-Wants=vortexl2-tunnel.service
+Wants=vortexl3-tunnel.service
 
 [Service]
 Type=simple
@@ -365,9 +365,9 @@ WantedBy=multi-user.target
         
         stopped_count = 0
         
-        # 1. Stop all vortexl2-socat-* systemd services
+        # 1. Stop all vortexl3-socat-* systemd services
         # List all service files
-        service_pattern = "/etc/systemd/system/vortexl2-socat-*.service"
+        service_pattern = "/etc/systemd/system/vortexl3-socat-*.service"
         service_files = glob.glob(service_pattern)
         
         for service_file in service_files:

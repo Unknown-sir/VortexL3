@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VortexL2 Tunnel Watchdog
+VortexL3 Tunnel Watchdog
 
 Monitors tunnel health and automatically recovers from failures.
 Restarts failed tunnels and port forwards with backoff strategy.
@@ -16,9 +16,9 @@ from typing import List, Optional
 # Ensure we can import the package
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from vortexl2.config import ConfigManager, TunnelConfig
-from vortexl2.tunnel import TunnelManager
-from vortexl2.health_monitor import HealthMonitor
+from vortexl3.config import ConfigManager, TunnelConfig
+from vortexl3.tunnel import TunnelManager
+from vortexl3.health_monitor import HealthMonitor
 
 
 # Setup logging
@@ -26,7 +26,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/var/log/vortexl2/watchdog.log'),
+        logging.FileHandler('/var/log/vortexl3/watchdog.log'),
         logging.StreamHandler()
     ]
 )
@@ -52,30 +52,67 @@ class TunnelWatchdog:
         self.tunnel_managers = {}
     
     async def initialize(self):
-        """Initialize tunnel managers for all configured tunnels."""
+        """Initialize tunnel managers for all configured tunnels (L2TPv3 + EasyTier)."""
         tunnels = self.config_manager.get_all_tunnels()
-        
+
         for tunnel_config in tunnels:
             if tunnel_config.is_configured():
                 self.tunnel_managers[tunnel_config.name] = TunnelManager(tunnel_config)
                 logger.info(f"Initialized watchdog for tunnel: {tunnel_config.name}")
-    
+
+        # EasyTier tunnels are managed via their systemd services
+        try:
+            from vortexl3.easytier_manager import EasyTierConfigManager
+            et_manager = EasyTierConfigManager()
+            for tunnel_config in et_manager.get_all_tunnels():
+                if tunnel_config.is_configured():
+                    logger.info(f"Initialized watchdog for EasyTier tunnel: {tunnel_config.name}")
+        except Exception as e:
+            logger.warning(f"EasyTier watchdog init skipped: {e}")
+
     async def check_health(self):
-        """Check health of all tunnels and ports."""
+        """Check health of all tunnels and ports (L2TPv3 + EasyTier)."""
+        import subprocess
+
         tunnels = self.config_manager.get_all_tunnels()
         configured_tunnels = [t for t in tunnels if t.is_configured()]
-        
+
         # Get all ports from all tunnels
         all_ports = []
         for tunnel in configured_tunnels:
             all_ports.extend(tunnel.forwarded_ports)
-        
+
         # Check tunnel health
         tunnel_statuses = self.health_monitor.check_all_tunnel_health(configured_tunnels)
-        
+
+        # Check EasyTier service health
+        try:
+            from vortexl3.easytier_manager import EasyTierConfigManager, EasyTierManager
+            et_manager = EasyTierConfigManager()
+            for et_config in et_manager.get_all_tunnels():
+                if not et_config.is_configured():
+                    continue
+                et_mgr = EasyTierManager(et_config)
+                is_running, status_msg = et_mgr.get_status()
+                from vortexl3.health_monitor import HealthStatus
+                from datetime import datetime
+                key = f"easytier:{et_config.name}"
+                prev = self.health_monitor.tunnel_health.get(key)
+                failures = 0 if is_running else ((prev.failure_count + 1) if prev and not prev.healthy else 1)
+                self.health_monitor.tunnel_health[key] = HealthStatus(
+                    healthy=is_running,
+                    message=f"EasyTier service: {status_msg}",
+                    last_check=datetime.now(),
+                    failure_count=failures,
+                )
+                tunnel_statuses[key] = self.health_monitor.tunnel_health[key]
+                all_ports.extend(et_config.forwarded_ports)
+        except Exception as e:
+            logger.warning(f"EasyTier health check skipped: {e}")
+
         # Check port health
         port_statuses = self.health_monitor.check_all_port_health(all_ports)
-        
+
         return tunnel_statuses, port_statuses
     
     async def recover_unhealthy_tunnel(self, tunnel_config: TunnelConfig):
@@ -125,7 +162,7 @@ class TunnelWatchdog:
         
         try:
             # We need to get the forward manager for this tunnel
-            from vortexl2.forward import get_forward_manager
+            from vortexl3.forward import get_forward_manager
             forward_manager = get_forward_manager(tunnel_config)
             
             if not forward_manager:
@@ -160,12 +197,23 @@ class TunnelWatchdog:
             return False
     
     async def recovery_cycle(self):
-        """Perform recovery for unhealthy components."""
+        """Perform recovery for unhealthy components (L2TPv3 + EasyTier)."""
+        import subprocess
+
         tunnels = self.config_manager.get_all_tunnels()
         unhealthy_tunnels, unhealthy_ports = self.health_monitor.get_recovery_needed()
-        
+
         # Recover tunnels first
         for tunnel_name in unhealthy_tunnels:
+            if tunnel_name.startswith("easytier:"):
+                et_name = tunnel_name.split(":", 1)[1]
+                logger.warning(f"Restarting EasyTier service: vortexl3-easytier-{et_name}")
+                subprocess.run(
+                    f"systemctl restart vortexl3-easytier-{et_name}",
+                    shell=True, capture_output=True, timeout=30,
+                )
+                await asyncio.sleep(2)
+                continue
             tunnel_config = next((t for t in tunnels if t.name == tunnel_name), None)
             if tunnel_config:
                 await self.recover_unhealthy_tunnel(tunnel_config)
@@ -178,7 +226,7 @@ class TunnelWatchdog:
     
     async def run(self):
         """Main watchdog loop."""
-        logger.info("Starting VortexL2 Tunnel Watchdog")
+        logger.info("Starting VortexL3 Tunnel Watchdog")
         
         await self.initialize()
         
@@ -209,7 +257,7 @@ class TunnelWatchdog:
     
     async def stop(self):
         """Stop the watchdog."""
-        logger.info("Stopping VortexL2 Tunnel Watchdog")
+        logger.info("Stopping VortexL3 Tunnel Watchdog")
         self.running = False
 
 

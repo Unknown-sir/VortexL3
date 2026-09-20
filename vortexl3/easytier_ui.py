@@ -1,5 +1,5 @@
 """
-VortexL2 EasyTier UI Components
+VortexL3 EasyTier UI Components
 
 UI functions for EasyTier tunnel management.
 """
@@ -151,23 +151,32 @@ def prompt_easytier_side() -> Optional[str]:
     return None
 
 
-def prompt_easytier_config(config: EasyTierConfig, side: str) -> bool:
+def prompt_easytier_config(config: EasyTierConfig, side: str, manager: EasyTierConfigManager = None) -> bool:
     """Prompt for EasyTier tunnel configuration."""
+    from .easytier_manager import DEFAULT_LISTEN_PORT
+
     console.print(f"\n[bold white]Configure EasyTier Tunnel: {config.name}[/]")
     console.print(f"[bold]Role: [{'green' if side == 'IRAN' else 'magenta'}]{side}[/][/]")
     console.print("[dim]Enter configuration values. Press Enter for defaults.[/]\n")
-    
-    # Set defaults based on side
+
+    used = manager.get_used_values(exclude_tunnel=config.name) if manager else {}
+
+    # Local IP (tunnel interface IP) - must be unique per tunnel on this machine
     if side == "IRAN":
         default_ip = "10.155.155.1"
-        default_hostname = "iran"
     else:
         default_ip = "10.155.155.2"
-        default_hostname = "kharej"
-    
-    # Local IP (tunnel interface IP)
+    if manager:
+        default_ip = manager.suggest_local_ip(side, exclude_tunnel=config.name)
+    elif config.local_ip:
+        default_ip = config.local_ip
     console.print("[dim]This is the IP for the tunnel interface (not your server's public IP)[/]")
-    local_ip = Prompt.ask("[bold yellow]Tunnel Interface IP[/]", default=default_ip)
+    while True:
+        local_ip = Prompt.ask("[bold yellow]Tunnel Interface IP[/]", default=default_ip)
+        if used and local_ip.split('/')[0] in used.get("local_ips", set()):
+            console.print(f"[red]IP {local_ip} is already used by another tunnel! Enter a different one.[/]")
+            continue
+        break
     config._config["local_ip"] = local_ip
     
     # Peer IP (remote server's PUBLIC IP)
@@ -184,25 +193,52 @@ def prompt_easytier_config(config: EasyTierConfig, side: str) -> bool:
         return False
     config._config["peer_ip"] = peer_ip
     
-    # Port
-    console.print("\n[dim]Port for EasyTier mesh (same on both sides)[/]")
-    port_str = Prompt.ask("[bold yellow]Port[/]", default="2070")
-    try:
-        port = int(port_str)
-        config._config["port"] = port
-    except ValueError:
-        console.print("[red]Invalid port number[/]")
-        return False
-    
+    # Port - must be unique per tunnel on this machine
+    console.print("\n[dim]Port for EasyTier mesh (same on both sides of a pair, unique per tunnel on this server)[/]")
+    default_port = str(getattr(config, "port", None) or DEFAULT_LISTEN_PORT)
+    if manager:
+        default_port = str(manager.suggest_listen_port(exclude_tunnel=config.name))
+    while True:
+        port_str = Prompt.ask("[bold yellow]Port[/]", default=default_port)
+        try:
+            port = int(port_str)
+            if not (1 <= port <= 65535):
+                console.print("[red]Port must be between 1 and 65535[/]")
+                continue
+            if used and port in used.get("listen_ports", set()):
+                console.print(f"[red]Port {port} is already used by another tunnel! Enter a different one.[/]")
+                continue
+            config._config["port"] = port
+            break
+        except ValueError:
+            console.print("[red]Invalid port number[/]")
+            return False
+
+    # Mesh network name - MUST match on both sides of the pair
+    console.print("\n[dim]Mesh network name (must be IDENTICAL on both servers of this pair)[/]")
+    default_net = config._config.get("network_name") or f"vortex-{config.name}"
+    network_name = Prompt.ask("[bold yellow]Network Name[/]", default=default_net)
+    config._config["network_name"] = network_name
+
     # Network secret
     console.print("\n[dim]Shared secret for the mesh network (must match on all nodes)[/]")
     secret = Prompt.ask("[bold yellow]Network Secret[/]", default="vortexl2")
     config._config["network_secret"] = secret
-    
-    # Hostname
-    console.print("\n[dim]Hostname for this node[/]")
+
+    # Hostname - defaults to tunnel name so multiple tunnels stay unique
+    console.print("\n[dim]Hostname for this node (unique per tunnel recommended)[/]")
+    default_hostname = config._config.get("hostname") or config.name
     hostname = Prompt.ask("[bold yellow]Hostname[/]", default=default_hostname)
     config._config["hostname"] = hostname
+
+    # Performance tuning
+    console.print("\n[dim]Performance: latency-first routing + compression + KCP (recommended ON)[/]")
+    perf = Prompt.ask("[bold yellow]Enable performance tuning?[/] (yes/no)", default="yes")
+    enable_perf = perf.strip().lower() in ("yes", "y", "1", "true")
+    config._config["latency_first"] = enable_perf
+    config._config["compression"] = "zstd" if enable_perf else "none"
+    config._config["enable_kcp"] = enable_perf
+    config._config["mtu"] = 1380
     
     # Remote forward IP (for port forwarding, IRAN only)
     if side == "IRAN":

@@ -1,5 +1,5 @@
 """
-VortexL2 DNS Manager UI
+VortexL3 DNS Manager UI
 
 TUI for DNS manager with Rich components.
 """

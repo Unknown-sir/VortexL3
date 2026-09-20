@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VortexL2 TCP Performance Optimization
+VortexL3 TCP Performance Optimization
 
 Tunes system TCP/IP stack and socket buffers for optimal throughput
 through the tunnel with large MTU and congestion control optimization.
@@ -50,6 +50,17 @@ class TCPOptimizer:
         
         # Increase max connections per port
         "net.ipv4.ip_local_port_range": "1024 65535",
+
+        # Forwarding / tunnel path (persisted for both L2TPv3 and EasyTier)
+        "net.ipv4.ip_forward": "1",
+        "net.ipv4.conf.all.rp_filter": "2",
+        "net.ipv4.conf.default.rp_filter": "2",
+
+        # Interface backlog and UDP buffers (mesh + forwarding throughput)
+        "net.core.netdev_max_backlog": "5000",
+        "net.core.netdev_budget": "600",
+        "net.ipv4.udp_rmem_min": "16384",
+        "net.ipv4.udp_wmem_min": "16384",
     }
     
     def run_command(self, cmd: str) -> Tuple[bool, str]:
@@ -127,21 +138,21 @@ class TCPOptimizer:
     
     def make_persistent(self) -> Tuple[bool, str]:
         """
-        Write parameters to /etc/sysctl.d/99-vortexl2.conf
+        Write parameters to /etc/sysctl.d/99-vortexl3.conf
         to persist across reboots.
         """
         try:
-            config_content = "# VortexL2 TCP Performance Optimization\n"
+            config_content = "# VortexL3 TCP Performance Optimization\n"
             config_content += "# Applied for high-throughput L2TPv3 tunneling\n\n"
             
             for param, value in self.SYSCTL_PARAMS.items():
                 config_content += f"{param} = {value}\n"
             
-            with open("/etc/sysctl.d/99-vortexl2.conf", "w") as f:
+            with open("/etc/sysctl.d/99-vortexl3.conf", "w") as f:
                 f.write(config_content)
             
-            logger.info("Created /etc/sysctl.d/99-vortexl2.conf")
-            return True, "Parameters saved to /etc/sysctl.d/99-vortexl2.conf"
+            logger.info("Created /etc/sysctl.d/99-vortexl3.conf")
+            return True, "Parameters saved to /etc/sysctl.d/99-vortexl3.conf"
         
         except Exception as e:
             return False, f"Failed to write sysctl config: {e}"

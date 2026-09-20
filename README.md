@@ -1,17 +1,17 @@
-# VortexL2
+# VortexL3
 
 **L2TPv3 & EasyTier Tunnel Manager for Ubuntu/Debian**
 
 A modular, production-quality CLI tool for managing L2TPv3 or EasyTier mesh tunnels with HAProxy-based port forwarding.
 
 ```
- __      __        _            _     ___  
- \ \    / /       | |          | |   |__ \ 
+ __      __        _            _     ___
+ \ \    / /       | |          | |   |__ \
   \ \  / /__  _ __| |_ _____  _| |      ) |
-   \ \/ / _ \| '__| __/ _ \ \/ / |     / / 
-    \  / (_) | |  | ||  __/>  <| |____/ /_ 
+   \ \/ / _ \| '__| __/ _ \ \/ / |     / /
+    \  / (_) | |  | ||  __/>  <| |____/ /_
      \/ \___/|_|   \__\___/_/\_\______|____|
-                                    v4.0.0
+                                    v5.0.0
 ```
 
 ## ✨ Features
@@ -25,7 +25,7 @@ A modular, production-quality CLI tool for managing L2TPv3 or EasyTier mesh tunn
 ## 📦 Installation
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/iliya-Developer/VortexL2/main/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/Unknown-sir/VortexL3/main/install.sh)
 ```
 
 During installation, choose:
@@ -35,13 +35,13 @@ During installation, choose:
 ### Install Specific Version
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/iliya-Developer/VortexL2/main/install.sh) v4.0.0
+bash <(curl -Ls https://raw.githubusercontent.com/Unknown-sir/VortexL3/main/install.sh) v5.0.0
 ```
 
 ## 🚀 Quick Start
 
 ```bash
-sudo vortexl2
+sudo vortexl3
 ```
 
 ### L2TPv3 Mode
@@ -72,18 +72,18 @@ sudo vortexl2
 | Tunnel IP | 10.155.155.1 | 10.155.155.2 |
 | Peer IP | (Kharej public) | (Iran public) |
 | Port | 2070 | 2070 |
-| Secret | vortexl2 | vortexl2 |
+| Secret | vortexl3 | vortexl3 |
 
 ## 🔧 Services
 
 ```bash
 # Check status
-sudo systemctl status vortexl2-tunnel          # L2TPv3
-sudo systemctl status vortexl2-easytier-*      # EasyTier
-sudo systemctl status vortexl2-forward-daemon
+sudo systemctl status vortexl3-tunnel          # L2TPv3
+sudo systemctl status vortexl3-easytier-*      # EasyTier
+sudo systemctl status vortexl3-forward-daemon
 
 # View logs
-journalctl -u vortexl2-forward-daemon -f
+journalctl -u vortexl3-forward-daemon -f
 ```
 
 ## 🔍 Troubleshooting
@@ -101,7 +101,7 @@ journalctl -u vortexl2-forward-daemon -f
 ## 🔄 Uninstall
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/iliya-Developer/VortexL2/main/uninstall.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/Unknown-sir/VortexL3/main/uninstall.sh)
 ```
 
 ## ⚠️ Security
@@ -115,4 +115,4 @@ MIT License
 
 ## 👤 Author
 
-Telegram: @iliyadevsh
+GitHub: [Unknown-sir/VortexL3](https://github.com/Unknown-sir/VortexL3)

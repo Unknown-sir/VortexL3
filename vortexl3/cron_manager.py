@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-VortexL2 Cron Manager
+VortexL3 Cron Manager
 Manages automatic restart of port forwarding daemon via cron jobs.
 
-IMPORTANT: This only restarts the port forwarding service (vortexl2-forward-daemon),
+IMPORTANT: This only restarts the port forwarding service (vortexl3-forward-daemon),
 NOT the tunnel service. Tunnels remain active during port forward restarts.
 """
 
@@ -28,10 +28,10 @@ def get_cron_jobs() -> str:
         return ""
 
 
-def has_vortexl2_cron() -> bool:
-    """Check if VortexL2 auto-restart cron job exists."""
+def has_vortexl3_cron() -> bool:
+    """Check if VortexL3 auto-restart cron job exists (incl. legacy VortexL2 entries)."""
     cron_content = get_cron_jobs()
-    return "vortexl2-forward-daemon" in cron_content
+    return "vortexl3-forward-daemon" in cron_content or "vortexl2-forward-daemon" in cron_content
 
 
 def add_auto_restart_cron(interval_minutes: int = 60) -> Tuple[bool, str]:
@@ -48,10 +48,11 @@ def add_auto_restart_cron(interval_minutes: int = 60) -> Tuple[bool, str]:
         # Get existing cron jobs
         existing_cron = get_cron_jobs()
         
-        # Remove old VortexL2 cron entries if they exist
-        lines = [line for line in existing_cron.split('\n') 
-                 if 'vortexl2-forward-daemon' not in line and line.strip()]
-        
+        # Remove old VortexL3 cron entries if they exist (incl. legacy VortexL2 names)
+        lines = [line for line in existing_cron.split('\n')
+                 if 'vortexl3-forward-daemon' not in line
+                 and 'vortexl2-forward-daemon' not in line and line.strip()]
+
         # Determine cron schedule based on interval
         if interval_minutes == 60:
             schedule = "0 * * * *"  # Every hour at minute 0
@@ -70,7 +71,7 @@ def add_auto_restart_cron(interval_minutes: int = 60) -> Tuple[bool, str]:
             description = f"every {interval_minutes} minutes"
         
         # Add new cron entry (only restarts port forwarding daemon, tunnels stay up)
-        new_entry = f"{schedule} systemctl restart vortexl2-forward-daemon >/dev/null 2>&1"
+        new_entry = f"{schedule} systemctl restart vortexl3-forward-daemon >/dev/null 2>&1"
         lines.append(new_entry)
         
         # Write back to crontab
@@ -95,16 +96,17 @@ def add_auto_restart_cron(interval_minutes: int = 60) -> Tuple[bool, str]:
 
 
 def remove_auto_restart_cron() -> Tuple[bool, str]:
-    """Remove VortexL2 auto-restart cron job."""
+    """Remove VortexL3 auto-restart cron job."""
     try:
         existing_cron = get_cron_jobs()
         
-        if "vortexl2-forward-daemon" not in existing_cron:
+        if "vortexl3-forward-daemon" not in existing_cron and "vortexl2-forward-daemon" not in existing_cron:
             return True, "No auto-restart cron job found (already disabled)"
-        
-        # Remove VortexL2 cron entries
-        lines = [line for line in existing_cron.split('\n') 
-                 if 'vortexl2-forward-daemon' not in line and line.strip()]
+
+        # Remove VortexL3 cron entries (incl. legacy VortexL2 names)
+        lines = [line for line in existing_cron.split('\n')
+                 if 'vortexl3-forward-daemon' not in line
+                 and 'vortexl2-forward-daemon' not in line and line.strip()]
         
         # Write back to crontab
         new_cron = '\n'.join(lines) + '\n' if lines else ''
@@ -137,7 +139,7 @@ def get_auto_restart_status() -> Tuple[bool, str]:
     cron_content = get_cron_jobs()
     
     for line in cron_content.split('\n'):
-        if 'vortexl2-forward-daemon' in line:
+        if 'vortexl3-forward-daemon' in line or 'vortexl2-forward-daemon' in line:
             # Parse schedule
             parts = line.split()
             if len(parts) >= 5:
@@ -163,7 +165,7 @@ def get_auto_restart_status() -> Tuple[bool, str]:
 def has_easytier_cron() -> bool:
     """Check if EasyTier tunnel auto-restart cron job exists."""
     cron_content = get_cron_jobs()
-    return "vortexl2-easytier" in cron_content
+    return "vortexl3-easytier" in cron_content
 
 
 def add_easytier_cron(interval_minutes: int = 60) -> Tuple[bool, str]:
@@ -179,10 +181,11 @@ def add_easytier_cron(interval_minutes: int = 60) -> Tuple[bool, str]:
     try:
         existing_cron = get_cron_jobs()
         
-        # Remove old EasyTier cron entries if they exist
-        lines = [line for line in existing_cron.split('\n') 
-                 if 'vortexl2-easytier' not in line and line.strip()]
-        
+        # Remove old EasyTier cron entries if they exist (incl. legacy VortexL2 names)
+        lines = [line for line in existing_cron.split('\n')
+                 if 'vortexl3-easytier' not in line
+                 and 'vortexl2-easytier' not in line and line.strip()]
+
         # Determine cron schedule based on interval
         if interval_minutes == 60:
             schedule = "0 * * * *"
@@ -201,7 +204,7 @@ def add_easytier_cron(interval_minutes: int = 60) -> Tuple[bool, str]:
             description = f"every {interval_minutes} minutes"
         
         # Add new cron entry - restart all EasyTier tunnel services
-        cmd = "for svc in /etc/systemd/system/vortexl2-easytier-*.service; do [ -f \\\"$svc\\\" ] && systemctl restart $(basename \\\"$svc\\\"); done"
+        cmd = "for svc in /etc/systemd/system/vortexl3-easytier-*.service; do [ -f \\\"$svc\\\" ] && systemctl restart $(basename \\\"$svc\\\"); done"
         new_entry = f"{schedule} {cmd} >/dev/null 2>&1"
         lines.append(new_entry)
         
@@ -231,12 +234,13 @@ def remove_easytier_cron() -> Tuple[bool, str]:
     try:
         existing_cron = get_cron_jobs()
         
-        if "vortexl2-easytier" not in existing_cron:
+        if "vortexl3-easytier" not in existing_cron and "vortexl2-easytier" not in existing_cron:
             return True, "No EasyTier auto-restart cron job found (already disabled)"
-        
-        # Remove EasyTier cron entries
-        lines = [line for line in existing_cron.split('\n') 
-                 if 'vortexl2-easytier' not in line and line.strip()]
+
+        # Remove EasyTier cron entries (incl. legacy VortexL2 names)
+        lines = [line for line in existing_cron.split('\n')
+                 if 'vortexl3-easytier' not in line
+                 and 'vortexl2-easytier' not in line and line.strip()]
         
         # Write back to crontab
         new_cron = '\n'.join(lines) + '\n' if lines else ''
@@ -269,7 +273,7 @@ def get_easytier_cron_status() -> Tuple[bool, str]:
     cron_content = get_cron_jobs()
     
     for line in cron_content.split('\n'):
-        if 'vortexl2-easytier' in line:
+        if 'vortexl3-easytier' in line:
             parts = line.split()
             if len(parts) >= 5:
                 minute = parts[0]

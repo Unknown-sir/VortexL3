@@ -1,6 +1,6 @@
-# HAProxy Port Forwarding for VortexL2 v2.0
+# HAProxy Port Forwarding for VortexL3 v2.0
 
-VortexL2 v2.0 uses **HAProxy** for production-grade, high-performance port forwarding.
+VortexL3 v2.0 uses **HAProxy** for production-grade, high-performance port forwarding.
 
 ## Why HAProxy?
 
@@ -14,10 +14,10 @@ VortexL2 v2.0 uses **HAProxy** for production-grade, high-performance port forwa
 
 ## Installation
 
-HAProxy is automatically installed by the VortexL2 installer:
+HAProxy is automatically installed by the VortexL3 installer:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/iliya-Developer/VortexL2/main/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/Unknown-sir/VortexL3/main/install.sh)
 ```
 
 Or manually:
@@ -28,12 +28,12 @@ sudo apt-get install haproxy
 
 ## Configuration
 
-HAProxy configuration is **automatically managed** by VortexL2:
+HAProxy configuration is **automatically managed** by VortexL3:
 
 - **Config Location:** `/etc/haproxy/haproxy.cfg`
 - **Backup:** `/etc/haproxy/haproxy.cfg.bak` (created before first modification)
 
-When you add/remove port forwards via the VortexL2 panel, HAProxy is automatically reconfigured and reloaded.
+When you add/remove port forwards via the VortexL3 panel, HAProxy is automatically reconfigured and reloaded.
 
 ## Commands
 

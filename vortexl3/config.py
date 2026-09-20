@@ -1,7 +1,7 @@
 """
-VortexL2 Configuration Management
+VortexL3 Configuration Management
 
-Handles loading/saving multiple tunnel configurations from /etc/vortexl2/tunnels/
+Handles loading/saving multiple tunnel configurations from /etc/vortexl3/tunnels/
 Each tunnel has its own YAML config file.
 """
 
@@ -11,13 +11,13 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 
-CONFIG_DIR = Path("/etc/vortexl2")
+CONFIG_DIR = Path("/etc/vortexl3")
 TUNNELS_DIR = CONFIG_DIR / "tunnels"
 GLOBAL_CONFIG_FILE = CONFIG_DIR / "config.yaml"
 
 
 class GlobalConfig:
-    """Global configuration for VortexL2 (forward mode, tunnel mode, etc.)."""
+    """Global configuration for VortexL3 (forward mode, tunnel mode, etc.)."""
     
     VALID_FORWARD_MODES = ["none", "haproxy", "socat"]
     VALID_TUNNEL_MODES = ["l2tpv3", "easytier"]
@@ -372,7 +372,15 @@ class ConfigManager:
         tunnel._config["peer_tunnel_id"] = base_tunnel_id + 1000
         tunnel._config["session_id"] = 10 + new_index
         tunnel._config["peer_session_id"] = 20 + new_index
-        
+
+        # Unique default UDP port per tunnel (55555, 55556, ...) so that
+        # multiple UDP-encap tunnels can coexist on one machine.
+        used_udp = {t.udp_port for t in self.get_all_tunnels()}
+        udp_port = 55555 + new_index
+        while udp_port in used_udp and udp_port < 65535:
+            udp_port += 1
+        tunnel._config["udp_port"] = udp_port
+
         # Don't save here - config file will be created only after successful tunnel setup
         return tunnel
     
@@ -390,10 +398,10 @@ class ConfigManager:
     def get_used_values(self, exclude_tunnel: str = None) -> Dict[str, set]:
         """
         Get all values currently in use by existing tunnels.
-        
+
         Args:
             exclude_tunnel: Tunnel name to exclude from the check (for editing existing tunnel)
-        
+
         Returns:
             Dictionary with sets of used values for each field
         """
@@ -405,16 +413,18 @@ class ConfigManager:
             "interface_ips": set(),
             "local_ips": set(),
             "remote_ips": set(),
+            "udp_ports": set(),
         }
-        
+
         for tunnel in self.get_all_tunnels():
             if exclude_tunnel and tunnel.name == exclude_tunnel:
                 continue
-            
+
             used["tunnel_ids"].add(tunnel.tunnel_id)
             used["peer_tunnel_ids"].add(tunnel.peer_tunnel_id)
             used["session_ids"].add(tunnel.session_id)
             used["peer_session_ids"].add(tunnel.peer_session_id)
+            used["udp_ports"].add(tunnel.udp_port)
             
             if tunnel.interface_ip:
                 # Store without CIDR for comparison
@@ -428,6 +438,28 @@ class ConfigManager:
         
         return used
     
+    def suggest_interface_ip(self, side: str, exclude_tunnel: str = None) -> str:
+        """Suggest a free tunnel interface IP (10.30.N.1 for IRAN, 10.30.N.2 for KHAREJ).
+
+        Scans 10.30.30.0/24 up to 10.30.39.0/24 so multiple tunnels on one
+        machine get non-overlapping subnets by default.
+        """
+        used = self.get_used_values(exclude_tunnel).get("interface_ips", set())
+        host = "1" if side == "IRAN" else "2"
+        for third in range(30, 40):
+            candidate = f"10.30.{third}.{host}"
+            if candidate not in used:
+                return candidate
+        return f"10.30.30.{host}"
+
+    def suggest_udp_port(self, exclude_tunnel: str = None) -> int:
+        """Suggest the first free UDP encap port starting at 55555."""
+        used = self.get_used_values(exclude_tunnel).get("udp_ports", set())
+        port = 55555
+        while port in used and port < 65535:
+            port += 1
+        return port
+
     def is_value_duplicate(self, field: str, value, exclude_tunnel: str = None) -> bool:
         """
         Check if a value is already in use by another tunnel.
@@ -450,6 +482,7 @@ class ConfigManager:
             "interface_ip": "interface_ips",
             "local_ip": "local_ips",
             "remote_ip": "remote_ips",
+            "udp_port": "udp_ports",
         }
         
         if field not in field_map:

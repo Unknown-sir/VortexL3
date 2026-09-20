@@ -1,5 +1,5 @@
 """
-VortexL2 DNS Manager
+VortexL3 DNS Manager
 
 Scans multiple DNS servers, tests latency, and automatically applies the best one.
 Supports periodic auto-check via cron.
@@ -13,7 +13,7 @@ from typing import Optional, List, Tuple, Dict, Any
 import yaml
 
 # Configuration
-DNS_CONFIG_FILE = Path("/etc/vortexl2/dns_config.yaml")
+DNS_CONFIG_FILE = Path("/etc/vortexl3/dns_config.yaml")
 DEFAULT_CHECK_INTERVAL = 4  # hours
 
 # Test domains for DNS validation
@@ -279,9 +279,9 @@ def get_check_interval() -> int:
 
 def update_dns_cron(hours: int) -> Tuple[bool, str]:
     """Update cron job for DNS auto-check."""
-    cron_marker = "# VortexL2 DNS Auto-Check"
-    cron_cmd = f"0 */{hours} * * * root /usr/local/bin/vortexl2-dns-check {cron_marker}"
-    cron_file = Path("/etc/cron.d/vortexl2-dns")
+    cron_marker = "# VortexL3 DNS Auto-Check"
+    cron_cmd = f"0 */{hours} * * * root /usr/local/bin/vortexl3-dns-check {cron_marker}"
+    cron_file = Path("/etc/cron.d/vortexl3-dns")
     
     try:
         with open(cron_file, 'w') as f:
@@ -296,7 +296,7 @@ def update_dns_cron(hours: int) -> Tuple[bool, str]:
 
 def remove_dns_cron() -> Tuple[bool, str]:
     """Remove DNS auto-check cron job."""
-    cron_file = Path("/etc/cron.d/vortexl2-dns")
+    cron_file = Path("/etc/cron.d/vortexl3-dns")
     try:
         if cron_file.exists():
             cron_file.unlink()
@@ -307,7 +307,7 @@ def remove_dns_cron() -> Tuple[bool, str]:
 
 def get_dns_cron_status() -> Tuple[bool, str]:
     """Get DNS cron job status."""
-    cron_file = Path("/etc/cron.d/vortexl2-dns")
+    cron_file = Path("/etc/cron.d/vortexl3-dns")
     if cron_file.exists():
         try:
             content = cron_file.read_text()

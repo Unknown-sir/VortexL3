@@ -1,5 +1,5 @@
 """
-VortexL2 L2TPv3 Tunnel Management
+VortexL3 L2TPv3 Tunnel Management
 
 Handles L2TPv3 tunnel and session creation/deletion using iproute2.
 """
@@ -58,16 +58,39 @@ class TunnelManager:
     def __init__(self, config):
         """
         Initialize with a TunnelConfig instance.
-        
+
         Args:
             config: TunnelConfig instance for the tunnel to manage
         """
         self.config = config
-    
+        self._actual_interface: Optional[str] = None
+
     @property
     def interface_name(self) -> str:
         """Get the interface name for this tunnel."""
         return self.config.interface_name
+
+    @property
+    def effective_interface(self) -> str:
+        """Interface actually used by the kernel (auto-detected after setup)."""
+        return self._actual_interface or self.config.interface_name
+
+    def _list_l2tp_interfaces(self) -> List[str]:
+        """List existing l2tpeth interfaces."""
+        result = run_command("ip -o link show | grep -o 'l2tpeth[0-9]*'")
+        if not result.success or not result.stdout:
+            return []
+        return sorted(set(result.stdout.split()))
+
+    def _detect_new_interface(self, before: List[str]) -> Optional[str]:
+        """Find the l2tpeth interface created by the last session setup."""
+        after = self._list_l2tp_interfaces()
+        new_ifaces = [i for i in after if i not in before]
+        if len(new_ifaces) == 1:
+            return new_ifaces[0]
+        if self.config.interface_name in after:
+            return self.config.interface_name
+        return new_ifaces[0] if new_ifaces else None
     
     def install_prerequisites(self) -> Tuple[bool, str]:
         """Install required packages and load kernel modules."""
@@ -184,24 +207,38 @@ class TunnelManager:
     def create_session(self) -> Tuple[bool, str]:
         """Create L2TP session in existing tunnel."""
         ids = self.config.get_tunnel_ids()
-        
+
         if not self.check_tunnel_exists():
             return False, "Tunnel does not exist. Create tunnel first."
-        
+
         if self.check_session_exists():
             return False, f"Session {ids['session_id']} already exists"
-        
+
+        # Snapshot interfaces: the kernel auto-names the session interface
+        # (l2tpethN) and it may differ from our configured index when several
+        # tunnels exist, so detect the newly created one afterwards.
+        before = self._list_l2tp_interfaces()
+
         cmd = (
             f"ip l2tp add session "
             f"tunnel_id {ids['tunnel_id']} "
             f"session_id {ids['session_id']} "
             f"peer_session_id {ids['peer_session_id']}"
         )
-        
+
         result = run_command(cmd)
         if not result.success:
             return False, f"Failed to create session: {result.stderr}"
-        
+
+        detected = self._detect_new_interface(before)
+        if detected:
+            self._actual_interface = detected
+            if detected != self.config.interface_name:
+                return True, (
+                    f"Session {ids['session_id']} created successfully "
+                    f"(kernel interface: {detected})"
+                )
+
         return True, f"Session {ids['session_id']} created successfully"
     
     def bring_up_interface(self) -> Tuple[bool, str]:
@@ -209,100 +246,104 @@ class TunnelManager:
         # Wait a moment for interface to appear
         import time
         time.sleep(0.5)
-        
-        result = run_command(f"ip link set {self.interface_name} up")
+
+        iface = self.effective_interface
+        result = run_command(f"ip link set {iface} up")
         if not result.success:
-            return False, f"Failed to bring up interface: {result.stderr}"
-        
-        return True, f"Interface {self.interface_name} is up"
-    
+            # Fall back: re-detect in case the kernel named it differently
+            # (multi-tunnel setups) and retry once.
+            detected = self._detect_new_interface([])
+            if detected and detected != iface:
+                self._actual_interface = detected
+                iface = detected
+                result = run_command(f"ip link set {iface} up")
+            if not result.success:
+                return False, f"Failed to bring up interface: {result.stderr}"
+
+        return True, f"Interface {iface} is up"
+
     def assign_ip(self) -> Tuple[bool, str]:
         """Assign IP address to tunnel interface with optimized MTU."""
         ip_cidr = self.config.interface_ip
-        
+        iface = self.effective_interface
+
         # Check if IP already assigned
-        result = run_command(f"ip addr show {self.interface_name}")
+        result = run_command(f"ip addr show {iface}")
         if ip_cidr.split('/')[0] in result.stdout:
             # Still set MTU even if IP exists
             pass
         else:
-            result = run_command(f"ip addr add {ip_cidr} dev {self.interface_name}")
+            result = run_command(f"ip addr add {ip_cidr} dev {iface}")
             if not result.success:
                 # Check if it's because address exists
                 if "RTNETLINK answers: File exists" in result.stderr:
                     pass  # Continue to MTU setting
                 else:
                     return False, f"Failed to assign IP: {result.stderr}"
-        
+
         # Set optimized MTU for better performance
         # UDP: 1280 (leave room for L2TP/UDP headers)
         # IP: 1500 (standard Ethernet MTU, L2TP encapsulation has low overhead)
         mtu = 1280 if self.config.encap_type == "udp" else 1500
-        result = run_command(f"ip link set dev {self.interface_name} mtu {mtu}")
+        result = run_command(f"ip link set dev {iface} mtu {mtu}")
         if not result.success:
             return False, f"Failed to set MTU: {result.stderr}"
-        
+
         # Enable TCP window scaling for better throughput
         result = run_command(f"sysctl -w net.ipv4.tcp_window_scaling=1")
         if not result.success:
             logger.warning(f"Could not enable TCP window scaling: {result.stderr}")
-        
-        return True, f"IP {ip_cidr} assigned to {self.interface_name} (MTU: {mtu})"
-    
+
+        return True, f"IP {ip_cidr} assigned to {iface} (MTU: {mtu})"
+
     def configure_routing(self) -> Tuple[bool, str]:
         """Configure routing for the tunnel interface."""
         steps = []
-        
-        # Disable reverse path filtering on tunnel interface
-        # This allows traffic that didn't originate from this host
-        result = run_command(f"sysctl -w net.ipv4.conf.{self.interface_name}.rp_filter=0")
+        iface = self.effective_interface
+
+        # Loose reverse path filtering on tunnel interface so forwarded
+        # traffic (which did not originate locally) is not dropped.
+        result = run_command(f"sysctl -w net.ipv4.conf.{iface}.rp_filter=2")
         if result.success:
-            steps.append(f"Disabled rp_filter on {self.interface_name}")
+            steps.append(f"Set rp_filter to loose mode on {iface}")
         else:
-            steps.append(f"Warning: Could not disable rp_filter: {result.stderr}")
-        
-        # Enable loose reverse path filtering on tunnel interface
-        # More permissive than strict mode
-        result = run_command(f"sysctl -w net.ipv4.conf.{self.interface_name}.rp_filter=2")
-        if result.success:
-            steps.append(f"Set rp_filter to loose mode on {self.interface_name}")
-        
+            steps.append(f"Warning: Could not set rp_filter: {result.stderr}")
+
         # Enable ARP on the interface
-        result = run_command(f"ip link set {self.interface_name} arp on")
+        result = run_command(f"ip link set {iface} arp on")
         if result.success:
-            steps.append(f"Enabled ARP on {self.interface_name}")
-        
+            steps.append(f"Enabled ARP on {iface}")
+
         # Ensure the interface is in UP and RUNNING state
-        result = run_command(f"ip link set {self.interface_name} up")
+        result = run_command(f"ip link set {iface} up")
         if result.success:
-            steps.append(f"Interface {self.interface_name} is UP")
-        
+            steps.append(f"Interface {iface} is UP")
+
         # Configure IP forwarding to allow traffic through tunnel
         result = run_command("sysctl -w net.ipv4.ip_forward=1")
         if result.success:
             steps.append("IP forwarding enabled")
-        
+
         return True, "\n".join(steps)
-    
+
     def configure_firewall(self) -> Tuple[bool, str]:
-        """Configure firewall rules for UDP encapsulation."""
+        """Configure firewall rules for UDP encapsulation (idempotent)."""
         if self.config.encap_type != "udp":
             return True, "Firewall rules not needed for IP encapsulation"
-        
+
         port = self.config.udp_port
-        
-        # Add iptables rules
+
+        # Add iptables rules only if missing (multi-tunnel safe)
         commands = [
-            f"iptables -I INPUT -p udp --dport {port} -j ACCEPT",
-            f"iptables -I OUTPUT -p udp --sport {port} -j ACCEPT",
+            f"iptables -C INPUT -p udp --dport {port} -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport {port} -j ACCEPT",
+            f"iptables -C OUTPUT -p udp --sport {port} -j ACCEPT 2>/dev/null || iptables -I OUTPUT -p udp --sport {port} -j ACCEPT",
         ]
-        
+
         for cmd in commands:
             result = run_command(cmd)
-            # Ignore if rule already exists
-            if not result.success and "already exists" not in result.stderr.lower():
+            if not result.success:
                 return False, f"Failed to add firewall rule: {result.stderr}"
-        
+
         return True, f"Firewall configured for UDP port {port}"
     def delete_session(self) -> Tuple[bool, str]:
         """Delete L2TP session."""
@@ -382,13 +423,12 @@ class TunnelManager:
             if not success:
                 return False, "\n".join(steps)
         
-        # Apply DPI evasion techniques
-        try:
-            from .dpi_evasion import setup_dpi_evasion
-            success, msg = setup_dpi_evasion(self.interface_name, self.config.encap_type)
-            steps.append(f"Apply DPI evasion: {msg}")
-        except Exception as e:
-            steps.append(f"DPI evasion (optional): Skipped - {e}")
+        # NOTE: DPI evasion (tc netem artificial delay) is intentionally NOT
+        # applied automatically: it adds ~25ms latency to every packet.
+        # Enable it manually only on networks with active DPI throttling:
+        #   from vortexl3.dpi_evasion import setup_dpi_evasion
+        #   setup_dpi_evasion("<iface>", "<encap>")
+        steps.append("DPI evasion: skipped (opt-in only, adds latency)")
         
         # Setup connection pooling to reduce signatures
         try:
@@ -405,17 +445,24 @@ class TunnelManager:
         """Perform full tunnel teardown: delete session and tunnel."""
         steps = []
         tunnel_name = self.config.name
-        
+
         steps.append(f"=== Tearing down tunnel: {tunnel_name} ===")
-        
+
         # Delete session
         success, msg = self.delete_session()
         steps.append(f"Delete session: {msg}")
-        
+
         # Delete tunnel
         success, msg = self.delete_tunnel()
         steps.append(f"Delete tunnel: {msg}")
-        
+
+        # Best-effort cleanup of per-tunnel firewall/qdisc state (UDP mode)
+        if self.config.encap_type == "udp":
+            port = self.config.udp_port
+            run_command(f"iptables -D INPUT -p udp --dport {port} -j ACCEPT 2>/dev/null")
+            run_command(f"iptables -D OUTPUT -p udp --sport {port} -j ACCEPT 2>/dev/null")
+            run_command(f"tc qdisc del dev {self.effective_interface} root 2>/dev/null")
+
         steps.append(f"\n✓ Tunnel '{tunnel_name}' teardown complete!")
         return True, "\n".join(steps)
     

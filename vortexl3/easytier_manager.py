@@ -1,5 +1,5 @@
 """
-VortexL2 EasyTier Tunnel Manager
+VortexL3 EasyTier Tunnel Manager
 
 Manages EasyTier mesh tunnel configuration and operations.
 """
@@ -16,8 +16,13 @@ logger = logging.getLogger(__name__)
 # Paths
 EASYTIER_BIN = Path("/usr/local/bin/easytier-core")
 EASYTIER_CLI = Path("/usr/local/bin/easytier-cli")
-CONFIG_DIR = Path("/etc/vortexl2")
+CONFIG_DIR = Path("/etc/vortexl3")
 TUNNELS_DIR = CONFIG_DIR / "tunnels"
+
+# Port allocation ranges (per-tunnel uniqueness for multi-tunnel support)
+DEFAULT_LISTEN_PORT = 2070
+RPC_PORT_BASE = 15888
+RPC_PORT_MAX = 15987
 
 
 class EasyTierConfig:
@@ -26,14 +31,22 @@ class EasyTierConfig:
     DEFAULTS = {
         "name": "tunnel1",
         "tunnel_type": "easytier",
+        "network_name": None,          # Defaults to f"vortex-{name}" (must match on both sides)
         "local_ip": "10.155.155.1",  # Interface IP
         "peer_ip": None,              # Remote server IP
-        "port": 2070,                 # Listen/connect port
-        "network_secret": "vortexl2",
+        "port": 2070,                 # Listen/connect port (auto-allocated per tunnel)
+        "rpc_port": None,             # RPC portal port (auto-allocated per tunnel)
+        "network_secret": "vortexl2",  # NOTE: kept for compat with existing peers; do not rename
         "interface_name": "tun1",
         "hostname": "node1",
         "forwarded_ports": [],
         "remote_forward_ip": None,    # For port forwarding target
+        # Performance tuning (latency / packet-loss fixes)
+        "mtu": 1380,
+        "latency_first": True,
+        "compression": "zstd",
+        "enable_kcp": True,
+        "disable_ipv6": False,
     }
     
     def __init__(self, name: str, config_data: Dict[str, Any] = None, auto_save: bool = True):
@@ -120,10 +133,81 @@ class EasyTierConfig:
     @property
     def network_secret(self) -> str:
         return self._config.get("network_secret", "vortexl2")
-    
+
     @network_secret.setter
     def network_secret(self, value: str) -> None:
         self._config["network_secret"] = value
+        self._save()
+
+    @property
+    def network_name(self) -> str:
+        """Mesh network name. Must be identical on both sides of a tunnel pair."""
+        name = self._config.get("network_name")
+        if not name:
+            name = f"vortex-{self._name}"
+        return name
+
+    @network_name.setter
+    def network_name(self, value: str) -> None:
+        self._config["network_name"] = value
+        self._save()
+
+    @property
+    def rpc_port(self) -> int:
+        """Unique RPC portal port for this tunnel (multi-tunnel support)."""
+        port = self._config.get("rpc_port")
+        if port is None:
+            return RPC_PORT_BASE
+        return int(port)
+
+    @rpc_port.setter
+    def rpc_port(self, value: int) -> None:
+        self._config["rpc_port"] = int(value)
+        self._save()
+
+    @property
+    def mtu(self) -> int:
+        return int(self._config.get("mtu", 1380))
+
+    @mtu.setter
+    def mtu(self, value: int) -> None:
+        self._config["mtu"] = int(value)
+        self._save()
+
+    @property
+    def latency_first(self) -> bool:
+        return bool(self._config.get("latency_first", True))
+
+    @latency_first.setter
+    def latency_first(self, value: bool) -> None:
+        self._config["latency_first"] = bool(value)
+        self._save()
+
+    @property
+    def compression(self) -> str:
+        return self._config.get("compression", "zstd") or "none"
+
+    @compression.setter
+    def compression(self, value: str) -> None:
+        self._config["compression"] = value
+        self._save()
+
+    @property
+    def enable_kcp(self) -> bool:
+        return bool(self._config.get("enable_kcp", True))
+
+    @enable_kcp.setter
+    def enable_kcp(self, value: bool) -> None:
+        self._config["enable_kcp"] = bool(value)
+        self._save()
+
+    @property
+    def disable_ipv6(self) -> bool:
+        return bool(self._config.get("disable_ipv6", False))
+
+    @disable_ipv6.setter
+    def disable_ipv6(self, value: bool) -> None:
+        self._config["disable_ipv6"] = bool(value)
         self._save()
     
     @property
@@ -181,22 +265,51 @@ class EasyTierConfig:
         return self._config.copy()
     
     def get_command_args(self) -> List[str]:
-        """Generate command line arguments for easytier-core."""
+        """Generate command line arguments for easytier-core.
+
+        Performance notes (latency / packet-loss fixes):
+        - Listen on BOTH tcp and udp so P2P can use UDP (lowest latency).
+          TCP-only mode causes TCP-over-TCP meltdown under load.
+        - Peers are added as both tcp:// and udp:// URLs.
+        - --latency-first routes via the lowest-latency path.
+        - --compression zstd reduces bytes on the wire.
+        - --mtu 1380 avoids fragmentation with encryption overhead.
+        - --enable-kcp-proxy protects TCP streams on lossy links.
+        - --rpc-portal is unique per tunnel so multiple tunnels can coexist.
+        - --network-name isolates each tunnel pair into its own mesh.
+        """
         args = [
             str(EASYTIER_BIN),
             "-i", self.local_ip,
+            "--network-name", self.network_name,
             "--hostname", self.hostname,
+            "-m", self.name,
             "--network-secret", self.network_secret,
-            "--default-protocol", "tcp",
-            "--listeners", f"tcp://[::]:{self.port}", f"tcp://0.0.0.0:{self.port}",
+            "--default-protocol", "udp",
+            "--listeners", f"tcp://0.0.0.0:{self.port}",
+            "--listeners", f"udp://0.0.0.0:{self.port}",
             "--multi-thread",
             "--dev-name", self.interface_name,
-            "--rpc-portal", "127.0.0.1:15888",  # Required for easytier-cli to work
+            "--mtu", str(self.mtu),
+            "--rpc-portal", f"127.0.0.1:{self.rpc_port}",
         ]
-        
+
+        if self.latency_first:
+            args.append("--latency-first")
+
+        if self.compression and self.compression != "none":
+            args.extend(["--compression", self.compression])
+
+        if self.enable_kcp:
+            args.append("--enable-kcp-proxy")
+
+        if self.disable_ipv6:
+            args.append("--disable-ipv6")
+
         if self.peer_ip:
-            args.extend(["--peers", f"tcp://{self.peer_ip}:{self.port}"])
-        
+            args.extend(["--peers", f"tcp://{self.peer_ip}:{self.port}",
+                         f"udp://{self.peer_ip}:{self.port}"])
+
         return args
     
     def get_command_string(self) -> str:
@@ -209,7 +322,7 @@ class EasyTierManager:
     
     def __init__(self, config: EasyTierConfig):
         self.config = config
-        self._service_name = f"vortexl2-easytier-{config.name}"
+        self._service_name = f"vortexl3-easytier-{config.name}"
     
     def _run_command(self, cmd: str) -> Tuple[bool, str, str]:
         """Execute shell command."""
@@ -226,6 +339,19 @@ class EasyTierManager:
     def check_easytier_installed(self) -> bool:
         """Check if EasyTier binary is installed."""
         return EASYTIER_BIN.exists() and os.access(EASYTIER_BIN, os.X_OK)
+
+    def _ensure_firewall(self) -> None:
+        """Open the tunnel listen port for TCP+UDP (idempotent, best-effort)."""
+        for proto in ("tcp", "udp"):
+            check = subprocess.run(
+                f"iptables -C INPUT -p {proto} --dport {self.config.port} -j ACCEPT",
+                shell=True, capture_output=True, timeout=10,
+            )
+            if check.returncode != 0:
+                subprocess.run(
+                    f"iptables -I INPUT -p {proto} --dport {self.config.port} -j ACCEPT",
+                    shell=True, capture_output=True, timeout=10,
+                )
     
     def check_tunnel_exists(self) -> bool:
         """Check if tunnel interface exists."""
@@ -235,19 +361,22 @@ class EasyTierManager:
     def _create_service_file(self) -> Tuple[bool, str]:
         """Create systemd service file for this tunnel."""
         cmd = self.config.get_command_string()
-        
+
         service_content = f"""[Unit]
-Description=VortexL2 EasyTier Tunnel - {self.config.name}
+Description=VortexL3 EasyTier Tunnel - {self.config.name}
 After=network.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 ExecStart={cmd}
-Restart=on-failure
-RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
+Restart=always
+RestartSec=3
+StartLimitIntervalSec=120
+StartLimitBurst=10
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -266,10 +395,13 @@ WantedBy=multi-user.target
         """Start the EasyTier tunnel."""
         if not self.check_easytier_installed():
             return False, "EasyTier binary not found at /usr/local/bin/easytier-core"
-        
+
         if not self.config.is_configured():
             return False, "Tunnel not fully configured (missing peer IP)"
-        
+
+        # Open firewall for both TCP and UDP listeners (idempotent)
+        self._ensure_firewall()
+
         # Create/update service file
         success, msg = self._create_service_file()
         if not success:
@@ -327,9 +459,20 @@ WantedBy=multi-user.target
         """
         if not EASYTIER_CLI.exists():
             return []
-        
-        success, stdout, stderr = self._run_command(f"{EASYTIER_CLI} peer")
-        if not success or not stdout:
+
+        # Query this tunnel's own RPC portal (unique per tunnel for multi-tunnel).
+        # Fall back to the default portal for configs created before rpc_port existed.
+        commands = [
+            f"{EASYTIER_CLI} --rpc-portal 127.0.0.1:{self.config.rpc_port} peer",
+            f"{EASYTIER_CLI} peer",
+        ]
+        stdout = ""
+        for cmd in commands:
+            success, out, stderr = self._run_command(cmd)
+            if success and out:
+                stdout = out
+                break
+        if not stdout:
             return []
         
         peers = []
@@ -425,13 +568,76 @@ class EasyTierConfigManager:
         return [EasyTierConfig(name) for name in self.list_tunnels()]
     
     def create_tunnel(self, name: str) -> EasyTierConfig:
-        """Create new EasyTier tunnel config (not saved yet)."""
+        """Create new EasyTier tunnel config (not saved yet).
+
+        Allocates resources that must be unique per tunnel on one machine:
+        listen port, RPC portal port, interface name, hostname and network name.
+        """
         tunnel = EasyTierConfig(name, auto_save=False)
         # Use tunnel name as interface name (Linux allows up to 15 chars)
         iface_name = name[:15] if len(name) > 15 else name
+        if iface_name in self.get_used_interface_names():
+            suffix = 1
+            base = name[:13] if len(name) > 13 else name
+            while f"{base}-{suffix}" in self.get_used_interface_names():
+                suffix += 1
+            iface_name = f"{base}-{suffix}"
         tunnel._config["interface_name"] = iface_name
         tunnel._config["hostname"] = name
+        tunnel._config["network_name"] = f"vortex-{name}"
+        tunnel._config["port"] = self.suggest_listen_port()
+        tunnel._config["rpc_port"] = self.suggest_rpc_port()
         return tunnel
+
+    def get_used_values(self, exclude_tunnel: str = None) -> Dict[str, Any]:
+        """Collect values already used by other EasyTier tunnels."""
+        used: Dict[str, Any] = {
+            "listen_ports": set(),
+            "rpc_ports": set(),
+            "interface_names": set(),
+            "local_ips": set(),
+            "hostnames": set(),
+        }
+        for tunnel in self.get_all_tunnels():
+            if exclude_tunnel and tunnel.name == exclude_tunnel:
+                continue
+            used["listen_ports"].add(int(tunnel.port))
+            used["rpc_ports"].add(int(tunnel.rpc_port))
+            used["interface_names"].add(tunnel.interface_name)
+            if tunnel.local_ip:
+                used["local_ips"].add(tunnel.local_ip.split('/')[0])
+            if tunnel.hostname:
+                used["hostnames"].add(tunnel.hostname)
+        return used
+
+    def get_used_interface_names(self) -> set:
+        return self.get_used_values().get("interface_names", set())
+
+    def suggest_listen_port(self, exclude_tunnel: str = None) -> int:
+        """Suggest the first free listen port starting at 2070."""
+        used = self.get_used_values(exclude_tunnel).get("listen_ports", set())
+        port = DEFAULT_LISTEN_PORT
+        while port in used and port < 65535:
+            port += 1
+        return port
+
+    def suggest_rpc_port(self, exclude_tunnel: str = None) -> int:
+        """Suggest the first free RPC portal port starting at 15888."""
+        used = self.get_used_values(exclude_tunnel).get("rpc_ports", set())
+        port = RPC_PORT_BASE
+        while port in used and port <= RPC_PORT_MAX:
+            port += 1
+        return port
+
+    def suggest_local_ip(self, side: str, exclude_tunnel: str = None) -> str:
+        """Suggest a free tunnel IP in 10.155.155.0/24 (.1 for IRAN, .2 for KHAREJ...)."""
+        used = self.get_used_values(exclude_tunnel).get("local_ips", set())
+        start = 1 if side == "IRAN" else 2
+        for host in list(range(start, 255, 2)) + list(range(1, 255)):
+            candidate = f"10.155.155.{host}"
+            if candidate not in used:
+                return candidate
+        return "10.155.155.1" if side == "IRAN" else "10.155.155.2"
     
     def delete_tunnel(self, name: str) -> bool:
         tunnel = self.get_tunnel(name)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VortexL2 DNS Auto-Check Script
+VortexL3 DNS Auto-Check Script
 
 This script is called by cron to automatically scan and apply the best DNS.
 """
@@ -9,12 +9,12 @@ import sys
 import os
 
 # Fix path
-sys.path.insert(0, '/opt/vortexl2')
+sys.path.insert(0, '/opt/vortexl3')
 
-from vortexl2.dns_manager import scan_and_apply_best_dns
+from vortexl3.dns_manager import scan_and_apply_best_dns
 
 def main():
-    print("VortexL2 DNS Auto-Check starting...")
+    print("VortexL3 DNS Auto-Check starting...")
     
     success, message, best_info = scan_and_apply_best_dns()
     

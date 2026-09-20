@@ -1,0 +1,30 @@
+[Unit]
+Description=VortexL3 Port Forward Daemon (HAProxy)
+After=network.target vortexl3-tunnel.service haproxy.service
+Requires=network.target
+Wants=haproxy.service
+Documentation=file:///usr/share/doc/vortexl3/README.md
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vortexl3
+Environment=PYTHONPATH=/opt/vortexl3
+ExecStart=/usr/bin/python3 -m vortexl3.forward_daemon
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vortexl3-forward
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=65536
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

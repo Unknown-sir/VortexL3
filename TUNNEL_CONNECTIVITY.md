@@ -1,4 +1,4 @@
-# VortexL2 Tunnel Connectivity Troubleshooting Guide
+# VortexL3 Tunnel Connectivity Troubleshooting Guide
 
 ## Common Issue: "Destination Host Unreachable" on Ping
 
@@ -173,7 +173,7 @@ sysctl net.ipv4.ip_forward
 ```bash
 #!/bin/bash
 
-echo "=== VortexL2 Tunnel Connectivity Check ==="
+echo "=== VortexL3 Tunnel Connectivity Check ==="
 
 # Check tunnel exists
 echo -e "\n[1] Tunnel Status:"
@@ -244,7 +244,7 @@ fi
 
 # 6. Make settings persistent
 cat <<EOF | sudo tee -a /etc/sysctl.conf
-# VortexL2 Tunnel Settings
+# VortexL3 Tunnel Settings
 net.ipv4.conf.$IFNAME.rp_filter=2
 net.ipv4.conf.all.rp_filter=2
 net.ipv4.ip_forward=1
@@ -260,9 +260,9 @@ ping -c 1 -W 2 $REMOTE_IP && echo "✓ SUCCESS" || echo "✗ FAILED"
 
 ---
 
-## Prevention: VortexL2 Integration
+## Prevention: VortexL3 Integration
 
-The latest VortexL2 update includes automatic routing configuration in `tunnel.py`:
+The latest VortexL3 update includes automatic routing configuration in `tunnel.py`:
 
 - **Automatically disables rp_filter** during tunnel setup
 - **Enables IP forwarding** for TCP/IP stack

@@ -1,5 +1,5 @@
 """
-VortexL2 Port Forward Management
+VortexL3 Port Forward Management
 
 Uses HAProxy for high-performance production-grade port forwarding.
 HAProxy must be manually enabled by user before it runs.

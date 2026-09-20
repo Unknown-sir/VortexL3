@@ -1,7 +1,7 @@
-"""VortexL2 - L2TPv3 & EasyTier Tunnel Manager"""
+"""VortexL3 - L2TPv3 & EasyTier Tunnel Manager"""
 
-__version__ = "4.0.0"
-__author__ = "Iliya-Developer"
+__version__ = "5.0.0"
+__author__ = "Unknown-sir"
 
 from .config import TunnelConfig, ConfigManager
 from .tunnel import TunnelManager

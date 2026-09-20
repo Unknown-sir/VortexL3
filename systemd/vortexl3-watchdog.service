@@ -1,0 +1,18 @@
+[Unit]
+Description=VortexL3 Tunnel Health Watchdog
+After=network.target vortexl3-tunnel.service
+Wants=vortexl3-tunnel.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 -m vortexl3.tunnel_watchdog
+Restart=always
+RestartSec=10
+LimitNOFILE=16384
+MemoryMax=128M
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VortexL2 Connection Pooling
+VortexL3 Connection Pooling
 
 Reuses connections and implements chaotic connection patterns
 to defeat flow-based DPI detection and reduce server fingerprinting.

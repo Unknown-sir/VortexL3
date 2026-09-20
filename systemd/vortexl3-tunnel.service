@@ -1,8 +1,8 @@
 [Unit]
-Description=VortexL2 L2TPv3 Tunnel Setup
+Description=VortexL3 L2TPv3 Tunnel Setup
 After=network-online.target
 Wants=network-online.target
-Documentation=https://github.com/iliya-Developer/VortexL2
+Documentation=https://github.com/Unknown-sir/VortexL3
 
 [Service]
 Type=oneshot
@@ -12,7 +12,7 @@ ExecStartPre=/sbin/modprobe l2tp_netlink
 ExecStartPre=/sbin/modprobe l2tp_eth
 # Small delay to ensure network is fully ready
 ExecStartPre=/bin/sleep 2
-ExecStart=/usr/local/bin/vortexl2 apply
+ExecStart=/usr/local/bin/vortexl3 apply
 RemainAfterExit=yes
 StandardOutput=journal
 StandardError=journal

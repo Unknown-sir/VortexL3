@@ -1,11 +1,11 @@
 #!/bin/bash
 #
-# VortexL2 Installer
+# VortexL3 Installer
 # L2TPv3 & EasyTier Tunnel Manager for Ubuntu/Debian
 #
 # Usage: 
-#   bash <(curl -Ls https://raw.githubusercontent.com/iliya-Developer/VortexL2/main/install.sh)
-#   bash <(curl -Ls https://raw.githubusercontent.com/iliya-Developer/VortexL2/main/install.sh) v1.1.0
+#   bash <(curl -Ls https://raw.githubusercontent.com/Unknown-sir/VortexL3/main/install.sh)
+#   bash <(curl -Ls https://raw.githubusercontent.com/Unknown-sir/VortexL3/main/install.sh) v1.1.0
 #
 
 set -e
@@ -18,11 +18,11 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Configuration
-INSTALL_DIR="/opt/vortexl2"
-BIN_PATH="/usr/local/bin/vortexl2"
+INSTALL_DIR="/opt/vortexl3"
+BIN_PATH="/usr/local/bin/vortexl3"
 SYSTEMD_DIR="/etc/systemd/system"
-CONFIG_DIR="/etc/vortexl2"
-GITHUB_REPO="iliya-Developer/VortexL2"
+CONFIG_DIR="/etc/vortexl3"
+GITHUB_REPO="Unknown-sir/VortexL3"
 REPO_URL="https://github.com/${GITHUB_REPO}.git"
 REPO_BRANCH="main"
 
@@ -39,7 +39,7 @@ cat << 'EOF'
      \/ \___/|_|   \__\___/_/\_\______|____|
 EOF
 echo -e "${NC}"
-echo -e "${GREEN}VortexL2 Installer${NC}"
+echo -e "${GREEN}VortexL3 Installer${NC}"
 echo -e "${CYAN}L2TPv3 & EasyTier Tunnel Manager${NC}"
 echo ""
 
@@ -194,7 +194,7 @@ if [ "$TUNNEL_MODE" = "l2tpv3" ]; then
     modprobe l2tp_eth 2>/dev/null || true
     
     # Ensure modules load on boot
-    cat > /etc/modules-load.d/vortexl2.conf << 'EOF'
+    cat > /etc/modules-load.d/vortexl3.conf << 'EOF'
 l2tp_core
 l2tp_netlink
 l2tp_eth
@@ -207,7 +207,7 @@ fi
 # ============================================
 # DOWNLOAD AND INSTALL
 # ============================================
-echo -e "${YELLOW}[4/6] Installing VortexL2 (${INSTALL_VERSION})...${NC}"
+echo -e "${YELLOW}[4/6] Installing VortexL3 (${INSTALL_VERSION})...${NC}"
 
 if [ -d "$INSTALL_DIR" ]; then
     echo -e "${YELLOW}Removing existing installation...${NC}"
@@ -218,11 +218,11 @@ mkdir -p "$INSTALL_DIR"
 echo -e "${YELLOW}Downloading from: ${DOWNLOAD_URL}${NC}"
 
 if ! curl -fsSL "$DOWNLOAD_URL" | tar -xz -C "$INSTALL_DIR" --strip-components=1; then
-    echo -e "${RED}Error: Failed to download VortexL2${NC}"
+    echo -e "${RED}Error: Failed to download VortexL3${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}✓ VortexL2 ${INSTALL_VERSION} downloaded successfully${NC}"
+echo -e "${GREEN}✓ VortexL3 ${INSTALL_VERSION} downloaded successfully${NC}"
 
 # ============================================
 # EASYTIER BINARY SETUP
@@ -232,7 +232,7 @@ if [ "$TUNNEL_MODE" = "easytier" ]; then
     
     # Stop any running EasyTier services first (to avoid "Text file busy")
     echo -e "${YELLOW}Stopping running EasyTier processes...${NC}"
-    systemctl stop 'vortexl2-easytier-*' 2>/dev/null || true
+    systemctl stop 'vortexl3-easytier-*' 2>/dev/null || true
     killall -9 easytier-core 2>/dev/null || true
     killall -9 easytier-cli 2>/dev/null || true
     pkill -9 -f easytier 2>/dev/null || true
@@ -290,18 +290,61 @@ apt-get install -y -qq python3-rich python3-yaml 2>/dev/null || {
 }
 
 # ============================================
+# MIGRATE FROM VortexL2 (legacy)
+# ============================================
+echo -e "${YELLOW}Checking for legacy VortexL2 installation...${NC}"
+if [ -d "/etc/vortexl2" ] || [ -d "/opt/vortexl2" ] || [ -f "/usr/local/bin/vortexl2" ]; then
+    echo -e "${YELLOW}Legacy VortexL2 found. Migrating configs and removing old units...${NC}"
+
+    # Stop + remove legacy services (new vortexl3 units replace them)
+    systemctl stop 'vortexl2-*.service' 2>/dev/null || true
+    systemctl disable 'vortexl2-*.service' 2>/dev/null || true
+    rm -f "$SYSTEMD_DIR"/vortexl2-*.service 2>/dev/null || true
+    pkill -f 'easytier-core' 2>/dev/null || true
+    sleep 1
+
+    # Migrate tunnel configs (YAML format is compatible; new defaults fill in)
+    if [ -d "/etc/vortexl2/tunnels" ]; then
+        mkdir -p /etc/vortexl3/tunnels
+        for f in /etc/vortexl2/tunnels/*.yaml; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f")
+            [ -f "/etc/vortexl3/tunnels/$base" ] || cp "$f" "/etc/vortexl3/tunnels/$base"
+        done
+        echo -e "${GREEN}  ✓ Tunnel configs migrated to /etc/vortexl3/tunnels${NC}"
+    fi
+    # Migrate DNS config if present
+    [ -f "/etc/vortexl2/dns_config.yaml" ] && [ ! -f "/etc/vortexl3/dns_config.yaml" ] && \
+        cp /etc/vortexl2/dns_config.yaml /etc/vortexl3/dns_config.yaml || true
+
+    # Remove legacy cron + sysctl + install paths + launcher
+    rm -f /etc/cron.d/vortexl2-dns 2>/dev/null || true
+    rm -f /etc/sysctl.d/99-vortexl2.conf 2>/dev/null || true
+    rm -rf /opt/vortexl2 2>/dev/null || true
+    rm -f /usr/local/bin/vortexl2 2>/dev/null || true
+    rm -f /usr/local/bin/vortexl2-dns-check 2>/dev/null || true
+    rm -rf /var/lib/vortexl2 /var/log/vortexl2 2>/dev/null || true
+    rm -f /etc/modules-load.d/vortexl2.conf 2>/dev/null || true
+
+    systemctl daemon-reload 2>/dev/null || true
+    echo -e "${GREEN}  ✓ Legacy VortexL2 cleaned up${NC}"
+else
+    echo -e "${GREEN}  ✓ No legacy installation found${NC}"
+fi
+
+# ============================================
 # CREATE LAUNCHER AND CONFIG
 # ============================================
 cat > "$BIN_PATH" << 'EOF'
 #!/bin/bash
-# VortexL2 Launcher
-exec python3 /opt/vortexl2/vortexl2/main.py "$@"
+# VortexL3 Launcher
+exec python3 /opt/vortexl3/vortexl3/main.py "$@"
 EOF
 chmod +x "$BIN_PATH"
 
 # Install DNS check script
-cp "$INSTALL_DIR/scripts/vortexl2-dns-check" /usr/local/bin/
-chmod +x /usr/local/bin/vortexl2-dns-check
+cp "$INSTALL_DIR/scripts/vortexl3-dns-check" /usr/local/bin/
+chmod +x /usr/local/bin/vortexl3-dns-check
 
 # Install dnsutils for nslookup
 apt-get install -y -qq dnsutils 2>/dev/null || true
@@ -312,17 +355,22 @@ echo "$INSTALL_VERSION" > "$INSTALL_DIR/.version"
 # Create config directories
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$CONFIG_DIR/tunnels"
-mkdir -p /var/lib/vortexl2
-mkdir -p /var/log/vortexl2
-mkdir -p /etc/vortexl2/haproxy
+mkdir -p /var/lib/vortexl3
+mkdir -p /var/log/vortexl3
+mkdir -p /etc/vortexl3/haproxy
 chmod 700 "$CONFIG_DIR"
-chmod 755 /var/lib/vortexl2
-chmod 755 /var/log/vortexl2
+chmod 755 /var/lib/vortexl3
+chmod 755 /var/log/vortexl3
 
-# Save tunnel mode to global config
+# Save tunnel mode to global config (preserve forward_mode on upgrades)
+PREV_FORWARD_MODE="none"
+if [ -f "$CONFIG_DIR/config.yaml" ]; then
+    PREV_FORWARD_MODE=$(grep -E '^[[:space:]]*forward_mode:' "$CONFIG_DIR/config.yaml" | awk '{print $2}' | tr -d '"')
+    [ -z "$PREV_FORWARD_MODE" ] && PREV_FORWARD_MODE="none"
+fi
 cat > "$CONFIG_DIR/config.yaml" << EOF
 tunnel_mode: $TUNNEL_MODE
-forward_mode: none
+forward_mode: $PREV_FORWARD_MODE
 EOF
 chmod 600 "$CONFIG_DIR/config.yaml"
 
@@ -332,9 +380,10 @@ chmod 600 "$CONFIG_DIR/config.yaml"
 echo -e "${YELLOW}[6/6] Installing systemd services...${NC}"
 
 if [ "$TUNNEL_MODE" = "l2tpv3" ]; then
-    cp "$INSTALL_DIR/systemd/vortexl2-tunnel.service" "$SYSTEMD_DIR/"
+    cp "$INSTALL_DIR/systemd/vortexl3-tunnel.service" "$SYSTEMD_DIR/"
 fi
-cp "$INSTALL_DIR/systemd/vortexl2-forward-daemon.service" "$SYSTEMD_DIR/"
+cp "$INSTALL_DIR/systemd/vortexl3-forward-daemon.service" "$SYSTEMD_DIR/"
+cp "$INSTALL_DIR/systemd/vortexl3-watchdog.service" "$SYSTEMD_DIR/"
 
 systemctl daemon-reload
 
@@ -342,18 +391,18 @@ systemctl daemon-reload
 # CLEANUP OLD SERVICES
 # ============================================
 echo -e "${YELLOW}Cleaning up old services...${NC}"
-systemctl stop 'vortexl2-forward@*.service' 2>/dev/null || true
-systemctl disable 'vortexl2-forward@*.service' 2>/dev/null || true
-rm -f "$SYSTEMD_DIR/vortexl2-forward@.service" 2>/dev/null || true
+systemctl stop 'vortexl3-forward@*.service' 2>/dev/null || true
+systemctl disable 'vortexl3-forward@*.service' 2>/dev/null || true
+rm -f "$SYSTEMD_DIR/vortexl3-forward@.service" 2>/dev/null || true
 
 if command -v nft &> /dev/null; then
-    nft delete table inet vortexl2_filter 2>/dev/null || true
-    nft delete table ip vortexl2_nat 2>/dev/null || true
+    nft delete table inet vortexl3_filter 2>/dev/null || true
+    nft delete table ip vortexl3_nat 2>/dev/null || true
 fi
-rm -f /etc/nftables.d/vortexl2-forward.nft 2>/dev/null || true
-rm -f /etc/sysctl.d/99-vortexl2-forward.conf 2>/dev/null || true
+rm -f /etc/nftables.d/vortexl3-forward.nft 2>/dev/null || true
+rm -f /etc/sysctl.d/99-vortexl3-forward.conf 2>/dev/null || true
 
-systemctl stop vortexl2-forward-daemon.service 2>/dev/null || true
+systemctl stop vortexl3-forward-daemon.service 2>/dev/null || true
 
 echo -e "${GREEN}  ✓ Old services cleaned up${NC}"
 
@@ -361,24 +410,32 @@ echo -e "${GREEN}  ✓ Old services cleaned up${NC}"
 # ENABLE SERVICES
 # ============================================
 if [ "$TUNNEL_MODE" = "l2tpv3" ]; then
-    systemctl enable vortexl2-tunnel.service 2>/dev/null || true
+    systemctl enable vortexl3-tunnel.service 2>/dev/null || true
 fi
-systemctl enable vortexl2-forward-daemon.service 2>/dev/null || true
+systemctl enable vortexl3-forward-daemon.service 2>/dev/null || true
+systemctl enable vortexl3-watchdog.service 2>/dev/null || true
 
 # Start services
-echo -e "${YELLOW}Starting VortexL2 services...${NC}"
+echo -e "${YELLOW}Starting VortexL3 services...${NC}"
+systemctl restart vortexl3-watchdog.service 2>/dev/null || systemctl start vortexl3-watchdog.service 2>/dev/null || true
+echo -e "${GREEN}  ✓ vortexl3-watchdog service started${NC}"
 
 if [ "$TUNNEL_MODE" = "l2tpv3" ]; then
-    if systemctl is-active --quiet vortexl2-tunnel.service 2>/dev/null; then
-        systemctl restart vortexl2-tunnel.service
-        echo -e "${GREEN}  ✓ vortexl2-tunnel service restarted${NC}"
+    if systemctl is-active --quiet vortexl3-tunnel.service 2>/dev/null; then
+        systemctl restart vortexl3-tunnel.service
+        echo -e "${GREEN}  ✓ vortexl3-tunnel service restarted${NC}"
     else
-        systemctl start vortexl2-tunnel.service 2>/dev/null || true
-        echo -e "${GREEN}  ✓ vortexl2-tunnel service started${NC}"
+        systemctl start vortexl3-tunnel.service 2>/dev/null || true
+        echo -e "${GREEN}  ✓ vortexl3-tunnel service started${NC}"
     fi
 elif [ "$TUNNEL_MODE" = "easytier" ]; then
+    # (Re)generate per-tunnel units from migrated/existing configs, then start them
+    if ls /etc/vortexl3/tunnels/*.yaml >/dev/null 2>&1; then
+        echo -e "${YELLOW}  Applying existing EasyTier tunnel configs...${NC}"
+        /usr/local/bin/vortexl3 apply 2>/dev/null || true
+    fi
     # Restart all EasyTier tunnel services that were previously configured
-    for service in /etc/systemd/system/vortexl2-easytier-*.service; do
+    for service in /etc/systemd/system/vortexl3-easytier-*.service; do
         if [ -f "$service" ]; then
             svc_name=$(basename "$service")
             echo -e "${YELLOW}  Restarting ${svc_name}...${NC}"
@@ -389,16 +446,16 @@ elif [ "$TUNNEL_MODE" = "easytier" ]; then
 fi
 
 echo -e "${YELLOW}  ℹ Port forwarding is DISABLED by default${NC}"
-echo -e "${YELLOW}  ℹ Use 'sudo vortexl2' → Port Forwards → Change Mode to enable${NC}"
+echo -e "${YELLOW}  ℹ Use 'sudo vortexl3' → Port Forwards → Change Mode to enable${NC}"
 
 echo ""
 echo -e "${GREEN}============================================${NC}"
-echo -e "${GREEN}  VortexL2 ${INSTALL_VERSION} Installation Complete!${NC}"
+echo -e "${GREEN}  VortexL3 ${INSTALL_VERSION} Installation Complete!${NC}"
 echo -e "${GREEN}  Tunnel Mode: ${TUNNEL_MODE^^}${NC}"
 echo -e "${GREEN}============================================${NC}"
 echo ""
 echo -e "${CYAN}Next steps:${NC}"
-echo -e "  1. Run: ${GREEN}sudo vortexl2${NC}"
+echo -e "  1. Run: ${GREEN}sudo vortexl3${NC}"
 if [ "$TUNNEL_MODE" = "l2tpv3" ]; then
     echo -e "  2. Create Tunnel (select IRAN or KHAREJ)"
     echo -e "  3. Configure IPs"
@@ -409,7 +466,7 @@ fi
 echo -e "  4. Add port forwards"
 echo ""
 echo -e "${YELLOW}Quick start:${NC}"
-echo -e "  ${GREEN}sudo vortexl2${NC}       - Open management panel"
+echo -e "  ${GREEN}sudo vortexl3${NC}       - Open management panel"
 echo ""
 echo -e "${CYAN}Install specific version:${NC}"
 echo -e "  ${GREEN}bash <(curl -Ls https://raw.githubusercontent.com/${GITHUB_REPO}/main/install.sh) v1.1.0${NC}"

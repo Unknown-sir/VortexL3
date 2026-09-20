@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VortexL2 Health Monitor
+VortexL3 Health Monitor
 
 Monitors tunnel health and port forward status.
 Automatically restarts failed services and recovers from disconnections.
@@ -236,7 +236,7 @@ class HealthMonitor:
     
     def print_health_report(self) -> str:
         """Generate a readable health report."""
-        lines = ["=== VortexL2 Health Report ===\n"]
+        lines = ["=== VortexL3 Health Report ===\n"]
         
         if self.tunnel_health:
             lines.append("TUNNELS:")

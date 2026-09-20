@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VortexL2 DPI Evasion & Traffic Obfuscation
+VortexL3 DPI Evasion & Traffic Obfuscation
 
 Implements traffic manipulation techniques to evade DPI detection:
 1. Random packet padding to hide pattern signatures
@@ -184,16 +184,20 @@ class DPIEvasion:
     
     @staticmethod
     def _apply_iptables_evasion(tunnel_name: str) -> None:
-        """Apply iptables rules for additional obfuscation."""
+        """Apply iptables rules for additional obfuscation (idempotent)."""
         rules = [
             # Randomize TTL
             f"iptables -t mangle -A OUTPUT -o {tunnel_name} -j TTL --ttl-set {random.randint(32, 128)}",
             # Randomize MSS
             f"iptables -t mangle -A OUTPUT -o {tunnel_name} -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss {random.randint(512, 1460)}",
         ]
-        
+
         for rule in rules:
-            L2TPObfuscation.run_command(rule)
+            # Skip if an equivalent rule already exists (avoid duplicates on re-setup)
+            check = rule.replace(" -A ", " -C ", 1)
+            success, _ = L2TPObfuscation.run_command(check)
+            if not success:
+                L2TPObfuscation.run_command(rule)
     
     def get_obfuscation_report(self) -> str:
         """Generate a report of applied obfuscation techniques."""

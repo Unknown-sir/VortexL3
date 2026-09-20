@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VortexL2 - L2TPv3 & EasyTier Tunnel Manager
+VortexL3 - L2TPv3 & EasyTier Tunnel Manager
 
 Main entry point and CLI handler.
 """
@@ -11,15 +11,15 @@ import argparse
 import subprocess
 import signal
 
-# CRITICAL: Fix sys.path BEFORE any vortexl2 imports
+# CRITICAL: Fix sys.path BEFORE any vortexl3 imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from vortexl2.haproxy_manager import HAProxyManager
-from vortexl2 import __version__
-from vortexl2.config import TunnelConfig, ConfigManager, GlobalConfig
-from vortexl2.tunnel import TunnelManager
-from vortexl2.forward import get_forward_manager, get_forward_mode, set_forward_mode, ForwardManager
-from vortexl2 import ui
+from vortexl3.haproxy_manager import HAProxyManager
+from vortexl3 import __version__
+from vortexl3.config import TunnelConfig, ConfigManager, GlobalConfig
+from vortexl3.tunnel import TunnelManager
+from vortexl3.forward import get_forward_manager, get_forward_mode, set_forward_mode, ForwardManager
+from vortexl3 import ui
 
 
 def signal_handler(sig, frame):
@@ -32,7 +32,7 @@ def signal_handler(sig, frame):
 def check_root():
     """Check if running as root."""
     if os.geteuid() != 0:
-        ui.show_error("VortexL2 must be run as root (use sudo)")
+        ui.show_error("VortexL3 must be run as root (use sudo)")
         sys.exit(1)
 
 
@@ -49,7 +49,7 @@ def restart_forward_daemon():
     if mode == "haproxy":
         subprocess.run("systemctl start haproxy", shell=True, capture_output=True)
     
-    subprocess.run("systemctl restart vortexl2-forward-daemon", shell=True, capture_output=True)
+    subprocess.run("systemctl restart vortexl3-forward-daemon", shell=True, capture_output=True)
 
 
 # ============================================
@@ -68,13 +68,13 @@ def cmd_apply():
     tunnels = manager.get_all_tunnels()
     
     if not tunnels:
-        print("VortexL2: No tunnels configured, skipping")
+        print("VortexL3: No tunnels configured, skipping")
         return 0
     
     errors = 0
     for config in tunnels:
         if not config.is_configured():
-            print(f"VortexL2: Tunnel '{config.name}' not fully configured, skipping")
+            print(f"VortexL3: Tunnel '{config.name}' not fully configured, skipping")
             continue
         
         tunnel = TunnelManager(config)
@@ -84,25 +84,25 @@ def cmd_apply():
         if not success:
             errors += 1
     
-    print("VortexL2: Tunnel setup complete.")
+    print("VortexL3: Tunnel setup complete.")
     return 1 if errors > 0 else 0
 
 
 def cmd_apply_easytier():
     """Apply all EasyTier tunnel configurations."""
-    from vortexl2.easytier_manager import EasyTierConfigManager, EasyTierManager
+    from vortexl3.easytier_manager import EasyTierConfigManager, EasyTierManager
     
     manager = EasyTierConfigManager()
     tunnels = manager.get_all_tunnels()
     
     if not tunnels:
-        print("VortexL2: No EasyTier tunnels configured, skipping")
+        print("VortexL3: No EasyTier tunnels configured, skipping")
         return 0
     
     errors = 0
     for config in tunnels:
         if not config.is_configured():
-            print(f"VortexL2: EasyTier tunnel '{config.name}' not fully configured, skipping")
+            print(f"VortexL3: EasyTier tunnel '{config.name}' not fully configured, skipping")
             continue
         
         tunnel_mgr = EasyTierManager(config)
@@ -112,7 +112,7 @@ def cmd_apply_easytier():
         if not success:
             errors += 1
     
-    print("VortexL2: EasyTier tunnel setup complete.")
+    print("VortexL3: EasyTier tunnel setup complete.")
     return 1 if errors > 0 else 0
 
 
@@ -122,7 +122,7 @@ def handle_prerequisites():
     tunnel_mode = get_tunnel_mode()
     
     ui.show_info("Applying TCP performance optimization...")
-    from vortexl2.tcp_optimizer import setup_tcp_optimization
+    from vortexl3.tcp_optimizer import setup_tcp_optimization
     success, opt_msg = setup_tcp_optimization()
     ui.show_output(opt_msg, "TCP Optimization")
     
@@ -316,7 +316,7 @@ def handle_forwards_menu(manager: ConfigManager):
                 if current_mode == "haproxy":
                     subprocess.run("systemctl stop haproxy", shell=True, capture_output=True)
                 elif current_mode == "socat":
-                    from vortexl2.socat_manager import stop_all_socat
+                    from vortexl3.socat_manager import stop_all_socat
                     stop_all_socat()
                 
                 set_forward_mode(new_mode)
@@ -329,7 +329,7 @@ def handle_forwards_menu(manager: ConfigManager):
                     subprocess.run("systemctl stop haproxy", shell=True, capture_output=True)
             ui.wait_for_enter()
         elif choice == "7":
-            from vortexl2.cron_manager import (
+            from vortexl3.cron_manager import (
                 get_auto_restart_status,
                 add_auto_restart_cron,
                 remove_auto_restart_cron
@@ -359,9 +359,9 @@ def handle_logs(manager: ConfigManager):
     tunnel_mode = get_tunnel_mode()
     
     if tunnel_mode == "easytier":
-        services = ["vortexl2-easytier-*.service", "vortexl2-forward-daemon.service"]
+        services = ["vortexl3-easytier-*.service", "vortexl3-forward-daemon.service"]
     else:
-        services = ["vortexl2-tunnel.service", "vortexl2-forward-daemon.service"]
+        services = ["vortexl3-tunnel.service", "vortexl3-forward-daemon.service"]
     
     for service in services:
         result = subprocess.run(
@@ -380,8 +380,8 @@ def handle_logs(manager: ConfigManager):
 
 def handle_easytier_create_tunnel():
     """Handle EasyTier tunnel creation."""
-    from vortexl2.easytier_manager import EasyTierConfigManager, EasyTierManager
-    from vortexl2.easytier_ui import (
+    from vortexl3.easytier_manager import EasyTierConfigManager, EasyTierManager
+    from vortexl3.easytier_ui import (
         prompt_easytier_side, prompt_easytier_config, prompt_tunnel_name
     )
     
@@ -405,7 +405,7 @@ def handle_easytier_create_tunnel():
     config = manager.create_tunnel(name)
     ui.show_info(f"Tunnel '{name}' will use interface {config.interface_name}")
     
-    if not prompt_easytier_config(config, side):
+    if not prompt_easytier_config(config, side, manager):
         ui.show_error("Configuration cancelled.")
         ui.wait_for_enter()
         return
@@ -426,8 +426,8 @@ def handle_easytier_create_tunnel():
 
 def handle_easytier_delete_tunnel():
     """Handle EasyTier tunnel deletion."""
-    from vortexl2.easytier_manager import EasyTierConfigManager, EasyTierManager
-    from vortexl2.easytier_ui import show_easytier_tunnel_list, prompt_select_easytier_tunnel
+    from vortexl3.easytier_manager import EasyTierConfigManager, EasyTierManager
+    from vortexl3.easytier_ui import show_easytier_tunnel_list, prompt_select_easytier_tunnel
     
     ui.show_banner()
     
@@ -460,8 +460,8 @@ def handle_easytier_delete_tunnel():
 
 def handle_easytier_list_tunnels():
     """Handle listing EasyTier tunnels."""
-    from vortexl2.easytier_manager import EasyTierConfigManager
-    from vortexl2.easytier_ui import show_easytier_tunnel_list
+    from vortexl3.easytier_manager import EasyTierConfigManager
+    from vortexl3.easytier_ui import show_easytier_tunnel_list
     
     ui.show_banner()
     manager = EasyTierConfigManager()
@@ -471,8 +471,8 @@ def handle_easytier_list_tunnels():
 
 def handle_easytier_restart_tunnel():
     """Handle EasyTier tunnel restart."""
-    from vortexl2.easytier_manager import EasyTierConfigManager, EasyTierManager
-    from vortexl2.easytier_ui import show_easytier_tunnel_list, prompt_select_easytier_tunnel
+    from vortexl3.easytier_manager import EasyTierConfigManager, EasyTierManager
+    from vortexl3.easytier_ui import show_easytier_tunnel_list, prompt_select_easytier_tunnel
     
     ui.show_banner()
     
@@ -499,8 +499,8 @@ def handle_easytier_restart_tunnel():
 
 def handle_easytier_forwards_menu():
     """Handle EasyTier port forwards (uses same HAProxy/Socat)."""
-    from vortexl2.easytier_manager import EasyTierConfigManager
-    from vortexl2.easytier_ui import prompt_select_easytier_tunnel
+    from vortexl3.easytier_manager import EasyTierConfigManager
+    from vortexl3.easytier_ui import prompt_select_easytier_tunnel
     
     ui.show_banner()
     
@@ -523,7 +523,7 @@ def handle_easytier_forwards_menu():
     
     # Use the same forwards menu logic with EasyTier config
     # Create a dummy L2TP config wrapper for compatibility
-    from vortexl2.config import TunnelConfig
+    from vortexl3.config import TunnelConfig
     
     # Create compatible config for HAProxy manager
     class EasyTierConfigWrapper:
@@ -577,7 +577,7 @@ def handle_easytier_forwards_menu():
             else:
                 ports = ui.prompt_ports()
                 if ports:
-                    from vortexl2.haproxy_manager import HAProxyManager
+                    from vortexl3.haproxy_manager import HAProxyManager
                     hap_manager = HAProxyManager(wrapper)
                     success, msg = hap_manager.add_multiple_forwards(ports)
                     ui.show_output(msg, "Add Forwards")
@@ -586,7 +586,7 @@ def handle_easytier_forwards_menu():
         elif choice == "2":
             ports = ui.prompt_ports()
             if ports:
-                from vortexl2.haproxy_manager import HAProxyManager
+                from vortexl3.haproxy_manager import HAProxyManager
                 hap_manager = HAProxyManager(wrapper)
                 success, msg = hap_manager.remove_multiple_forwards(ports)
                 ui.show_output(msg, "Remove Forwards")
@@ -627,7 +627,7 @@ def handle_easytier_forwards_menu():
 
 def handle_easytier_cron_menu():
     """Handle EasyTier tunnel auto-restart cron configuration."""
-    from vortexl2 import cron_manager
+    from vortexl3 import cron_manager
     
     while True:
         ui.clear_screen()
@@ -675,8 +675,8 @@ def handle_easytier_cron_menu():
 
 def handle_dns_menu():
     """Handle DNS Manager menu."""
-    from vortexl2 import dns_manager
-    from vortexl2 import dns_ui
+    from vortexl3 import dns_manager
+    from vortexl3 import dns_ui
     
     while True:
         ui.clear_screen()
@@ -783,9 +783,9 @@ def main_menu_l2tpv3():
 
 def main_menu_easytier():
     """EasyTier main menu loop."""
-    from vortexl2.easytier_ui import show_easytier_main_menu
-    from vortexl2.easytier_manager import EasyTierConfigManager
-    from vortexl2 import cron_manager
+    from vortexl3.easytier_ui import show_easytier_main_menu
+    from vortexl3.easytier_manager import EasyTierConfigManager
+    from vortexl3 import cron_manager
     
     while True:
         ui.show_banner()
@@ -829,7 +829,7 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     
     parser = argparse.ArgumentParser(
-        description="VortexL2 - L2TPv3 & EasyTier Tunnel Manager",
+        description="VortexL3 - L2TPv3 & EasyTier Tunnel Manager",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Commands:
@@ -837,8 +837,8 @@ Commands:
   apply      Apply all tunnel configurations (used by systemd)
 
 Examples:
-  sudo vortexl2           # Open management panel
-  sudo vortexl2 apply     # Apply all tunnels (for systemd)
+  sudo vortexl3           # Open management panel
+  sudo vortexl3 apply     # Apply all tunnels (for systemd)
         """
     )
     parser.add_argument(
@@ -850,7 +850,7 @@ Examples:
     parser.add_argument(
         '--version', '-v',
         action='version',
-        version=f'VortexL2 {__version__}'
+        version=f'VortexL3 {__version__}'
     )
     
     args = parser.parse_args()

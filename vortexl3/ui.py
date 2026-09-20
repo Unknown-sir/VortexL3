@@ -1,5 +1,5 @@
 """
-VortexL2 Terminal User Interface
+VortexL3 Terminal User Interface
 
 Rich-based TUI with ASCII banner and menu system.
 """
@@ -156,8 +156,8 @@ def show_banner():
     
     # Developer info bar
     console.print(Panel(
-        f"[bold white]Telegram:[/] [cyan]@iliyadevsh[/]  |  [bold white]Version:[/] [red]{__version__}[/]  |  [bold white]GitHub:[/] [cyan]github.com/iliya-Developer[/]",
-        title="[bold white]VortexL2 - L2TPv3 Tunnel Manager[/]",
+        f"[bold white]Version:[/] [red]{__version__}[/]  |  [bold white]GitHub:[/] [cyan]github.com/Unknown-sir/VortexL3[/]",
+        title="[bold white]VortexL3 - L2TPv3 Tunnel Manager[/]",
         border_style="cyan",
         box=box.ROUNDED
     ))
@@ -346,7 +346,9 @@ def prompt_tunnel_config(config: TunnelConfig, side: str, manager: ConfigManager
     if manager:
         used_values = manager.get_used_values(exclude_tunnel=config.name)
     
-    # Set defaults based on side
+    # Set defaults based on side. When several tunnels exist on this machine,
+    # bump the defaults until they are free so the second tunnel does not
+    # collide with the first one (IDs must still be mirrored on the peer side).
     if side == "IRAN":
         default_interface_ip = "10.30.30.1"
         default_remote_forward = "10.30.30.2"
@@ -361,6 +363,19 @@ def prompt_tunnel_config(config: TunnelConfig, side: str, manager: ConfigManager
         default_peer_tunnel_id = 1000
         default_session_id = 20
         default_peer_session_id = 10
+
+    if manager:
+        used_ids = manager.get_used_values(exclude_tunnel=config.name)
+        default_interface_ip = manager.suggest_interface_ip(side, exclude_tunnel=config.name)
+        # Paired defaults stay on the same side convention (IRAN 1xxx / KHAREJ 2xxx)
+        while default_tunnel_id in used_ids.get("tunnel_ids", set()):
+            default_tunnel_id += 100
+        while default_peer_tunnel_id in used_ids.get("peer_tunnel_ids", set()):
+            default_peer_tunnel_id += 100
+        while default_session_id in used_ids.get("session_ids", set()):
+            default_session_id += 10
+        while default_peer_session_id in used_ids.get("peer_session_ids", set()):
+            default_peer_session_id += 10
     
     # Local IP (with validation and auto-detection)
     detected_ip = get_local_ip()
@@ -401,10 +416,28 @@ def prompt_tunnel_config(config: TunnelConfig, side: str, manager: ConfigManager
     config.encap_type = encap_type
     console.print(f"[green]✓ Encapsulation: {encap_type.upper()}[/]")
     
-    # UDP port (if UDP mode)
+    # UDP port (if UDP mode) - must be unique per tunnel on this machine
     if encap_type == "udp":
-        console.print("\n[dim]Enter UDP port for L2TP tunnel[/]")
-        udp_port = prompt_udp_port()
+        console.print("\n[dim]Enter UDP port for L2TP tunnel (unique per tunnel on this server)[/]")
+        default_udp = str(config.udp_port)
+        if manager:
+            default_udp = str(manager.suggest_udp_port(exclude_tunnel=config.name))
+        while True:
+            port_str = Prompt.ask(
+                "[bold cyan]UDP port[/]",
+                default=default_udp
+            )
+            try:
+                udp_port = int(port_str)
+                if not (1 <= udp_port <= 65535):
+                    console.print("[red]Port must be between 1 and 65535[/]")
+                    continue
+                if used_values and udp_port in used_values.get("udp_ports", set()):
+                    console.print(f"[red]Error: UDP port {udp_port} is already used by another tunnel![/]")
+                    continue
+                break
+            except ValueError:
+                console.print("[red]Invalid port number[/]")
         config.udp_port = udp_port
         console.print(f"[green]✓ UDP Port: {udp_port}[/]")
     
@@ -434,7 +467,13 @@ def prompt_tunnel_config(config: TunnelConfig, side: str, manager: ConfigManager
     config.interface_ip = interface_ip
     
     # Remote forward target IP (only relevant for Iran, with validation)
+    # Default follows the chosen interface subnet (e.g. 10.30.31.1 -> 10.30.31.2)
     if side == "IRAN":
+        iface_base = interface_ip.split('/')[0].rsplit('.', 1)[0]
+        paired_default = f"{iface_base}.2"
+        if default_remote_forward not in (paired_default,):
+            # Prefer the paired IP unless the classic default is free
+            default_remote_forward = paired_default
         remote_forward = prompt_valid_ip(
             "[bold yellow]Remote Forward Target IP[/]",
             default=default_remote_forward,

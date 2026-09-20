@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VortexL2 Monitoring & Alerting System
+VortexL3 Monitoring & Alerting System
 
 Real-time monitoring of tunnel health, performance metrics,
 and automated alerting for anomalies and failures.
@@ -145,7 +145,7 @@ class AlertThresholds:
 class AlertManager:
     """Manages alerts and notifications."""
     
-    def __init__(self, log_dir: Path = Path("/var/log/vortexl2")):
+    def __init__(self, log_dir: Path = Path("/var/log/vortexl3")):
         self.log_dir = log_dir
         self.alert_log = log_dir / "alerts.log"
         self.alerts: List[AlertEvent] = []
@@ -199,7 +199,7 @@ class AlertManager:
             # For critical alerts, try to send system notification
             try:
                 subprocess.run(
-                    ["notify-send", "-u", "critical", "VortexL2 Alert", alert.message],
+                    ["notify-send", "-u", "critical", "VortexL3 Alert", alert.message],
                     timeout=5,
                     capture_output=True
                 )

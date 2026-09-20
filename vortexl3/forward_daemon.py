@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VortexL2 Forward Daemon
+VortexL3 Forward Daemon
 
 Manages HAProxy-based port forwarding based on global config.
 HAProxy is NOT auto-started - user must enable forward mode first.
@@ -18,15 +18,15 @@ from pathlib import Path
 # Ensure we can import the package
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from vortexl2.config import ConfigManager, GlobalConfig
-from vortexl2.forward import get_forward_manager, get_forward_mode
+from vortexl3.config import ConfigManager, GlobalConfig
+from vortexl3.forward import get_forward_manager, get_forward_mode
 
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/var/log/vortexl2/forward-daemon.log'),
+        logging.FileHandler('/var/log/vortexl3/forward-daemon.log'),
         logging.StreamHandler()
     ]
 )
@@ -34,25 +34,36 @@ logger = logging.getLogger(__name__)
 
 class ForwardDaemon:
     """Manages HAProxy-based port forwarding."""
-    
+
     def __init__(self):
         self.config_manager = ConfigManager()
         self.forward_manager = None
         self.running = False
+
+    @staticmethod
+    def _stop_socat_processes() -> None:
+        """Stop stray socat listeners (only if any exist)."""
+        check = subprocess.run(
+            "pgrep -f 'socat.*TCP-LISTEN' >/dev/null 2>&1",
+            shell=True, capture_output=True,
+        )
+        if check.returncode == 0:
+            subprocess.run("pkill -f 'socat.*TCP-LISTEN'", shell=True, capture_output=True)
+            logger.info("Stopped stray socat processes")
     
     async def start(self):
         """Start the forward daemon."""
-        logger.info("Starting VortexL2 Forward Daemon")
+        logger.info("Starting VortexL3 Forward Daemon")
         
         # Get forward mode
         mode = get_forward_mode()
         logger.info(f"Forward mode: {mode}")
         
         if mode == "none":
-            logger.info("Port forwarding is DISABLED. Use 'sudo vortexl2' to enable HAProxy mode.")
+            logger.info("Port forwarding is DISABLED. Use 'sudo vortexl3' to enable HAProxy mode.")
             # Stop both HAProxy and any socat services
             subprocess.run("systemctl stop haproxy", shell=True, capture_output=True)
-            subprocess.run("pkill -f 'socat.*TCP-LISTEN'", shell=True, capture_output=True)
+            self._stop_socat_processes()
             self.running = True
             # Just wait - don't start any forwarding
             try:
@@ -66,7 +77,7 @@ class ForwardDaemon:
         if mode == "haproxy":
             logger.info("Starting HAProxy-based port forwarding")
             # Stop any socat processes first to free ports
-            subprocess.run("pkill -f 'socat.*TCP-LISTEN'", shell=True, capture_output=True)
+            self._stop_socat_processes()
             # Ensure HAProxy service is running
             result = subprocess.run(
                 "systemctl start haproxy",
@@ -110,7 +121,7 @@ class ForwardDaemon:
     
     async def stop(self):
         """Stop the forward daemon."""
-        logger.info("Stopping VortexL2 Forward Daemon")
+        logger.info("Stopping VortexL3 Forward Daemon")
         self.running = False
         
         if self.forward_manager:
