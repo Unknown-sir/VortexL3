@@ -4,15 +4,6 @@
 
 A modular, production-quality CLI tool for managing L2TPv3 or EasyTier mesh tunnels with HAProxy-based port forwarding.
 
-```
- __      __        _            _     ___
- \ \    / /       | |          | |   |__ \
-  \ \  / /__  _ __| |_ _____  _| |      ) |
-   \ \/ / _ \| '__| __/ _ \ \/ / |     / /
-    \  / (_) | |  | ||  __/>  <| |____/ /_
-     \/ \___/|_|   \__\___/_/\_\______|____|
-                                    v5.0.1
-```
 
 ## ✨ Features
 
