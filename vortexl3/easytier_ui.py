@@ -214,16 +214,24 @@ def prompt_easytier_config(config: EasyTierConfig, side: str, manager: EasyTierC
             console.print("[red]Invalid port number[/]")
             return False
 
-    # Mesh network name - MUST match on both sides of the pair
-    console.print("\n[dim]Mesh network name (must be IDENTICAL on both servers of this pair)[/]")
-    default_net = config._config.get("network_name") or f"vortex-{config.name}"
-    network_name = Prompt.ask("[bold yellow]Network Name[/]", default=default_net)
-    config._config["network_name"] = network_name
-
-    # Network secret
+    # Network secret FIRST: the mesh network name is auto-derived from it,
+    # so both servers always land in the same mesh.
     console.print("\n[dim]Shared secret for the mesh network (must match on all nodes)[/]")
     secret = Prompt.ask("[bold yellow]Network Secret[/]", default="vortexl2")
     config._config["network_secret"] = secret
+
+    # Mesh network name - auto from secret (recommended) or custom.
+    # Custom value MUST be identical on both servers of the pair.
+    from .easytier_manager import derive_network_name
+    auto_net = derive_network_name(secret)
+    console.print(f"\n[dim]Mesh network name (auto from secret: [green]{auto_net}[/])[/]")
+    custom_net = Prompt.ask("[bold yellow]Network Name (Enter=auto)[/]", default="")
+    if custom_net.strip():
+        config._config["network_name"] = custom_net.strip()
+        console.print("[yellow]⚠ Custom name must be IDENTICAL on both servers, or peering will fail![/]")
+    else:
+        config._config["network_name"] = None
+        console.print(f"[green]✓ Auto network name: {auto_net}[/]")
 
     # Hostname - defaults to tunnel name so multiple tunnels stay unique
     console.print("\n[dim]Hostname for this node (unique per tunnel recommended)[/]")

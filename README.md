@@ -11,7 +11,7 @@ A modular, production-quality CLI tool for managing L2TPv3 or EasyTier mesh tunn
    \ \/ / _ \| '__| __/ _ \ \/ / |     / /
     \  / (_) | |  | ||  __/>  <| |____/ /_
      \/ \___/|_|   \__\___/_/\_\______|____|
-                                    v5.0.0
+                                    v5.0.1
 ```
 
 ## ✨ Features
@@ -35,7 +35,7 @@ During installation, choose:
 ### Install Specific Version
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/Unknown-sir/VortexL3/main/install.sh) v5.0.0
+bash <(curl -Ls https://raw.githubusercontent.com/Unknown-sir/VortexL3/main/install.sh) v5.0.1
 ```
 
 ## 🚀 Quick Start
@@ -73,6 +73,11 @@ sudo vortexl3
 | Peer IP | (Kharej public) | (Iran public) |
 | Port | 2070 | 2070 |
 | Secret | vortexl2 | vortexl2 |
+| Network Name | auto (from secret) | auto (from secret) |
+
+> **Important:** both servers must use the same Secret, Port and Network Name.
+> Keep Network Name on **auto** and peering always matches, even if the
+> tunnel names differ per server.
 
 ## 🔧 Services
 

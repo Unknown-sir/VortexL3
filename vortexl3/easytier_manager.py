@@ -4,6 +4,7 @@ VortexL3 EasyTier Tunnel Manager
 Manages EasyTier mesh tunnel configuration and operations.
 """
 
+import hashlib
 import os
 import subprocess
 import logging
@@ -63,13 +64,26 @@ def get_binary_version() -> str:
         return "unknown"
 
 
+def derive_network_name(secret: str) -> str:
+    """Derive the mesh network name from the shared secret.
+
+    Both servers of a pair always configure the SAME secret, so deriving the
+    name from it keeps them in the same mesh even when the local tunnel names
+    differ. The secret itself is hashed (never embedded) to avoid leaking it
+    in handshakes.
+    """
+    secret = secret or "vortexl2"
+    digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()[:12]
+    return f"vortex-{digest}"
+
+
 class EasyTierConfig:
     """Configuration for an EasyTier tunnel."""
     
     DEFAULTS = {
         "name": "tunnel1",
         "tunnel_type": "easytier",
-        "network_name": None,          # Defaults to f"vortex-{name}" (must match on both sides)
+        "network_name": None,          # Auto-derived from shared secret (must match on both sides)
         "local_ip": "10.155.155.1",  # Interface IP
         "peer_ip": None,              # Remote server IP
         "port": 2070,                 # Listen/connect port (auto-allocated per tunnel)
@@ -182,10 +196,15 @@ class EasyTierConfig:
 
     @property
     def network_name(self) -> str:
-        """Mesh network name. Must be identical on both sides of a tunnel pair."""
+        """Mesh network name. Must be identical on both sides of a tunnel pair.
+
+        Auto-derived from the shared secret so both servers always match even
+        when their local tunnel names differ. Also auto-migrates v5.0.0 configs
+        whose name was derived from the local tunnel name (that broke peering).
+        """
         name = self._config.get("network_name")
-        if not name:
-            name = f"vortex-{self._name}"
+        if not name or name == f"vortex-{self._name}":
+            return derive_network_name(self._config.get("network_secret", "vortexl2"))
         return name
 
     @network_name.setter
@@ -734,7 +753,8 @@ class EasyTierConfigManager:
             iface_name = f"{base}-{suffix}"
         tunnel._config["interface_name"] = iface_name
         tunnel._config["hostname"] = name
-        tunnel._config["network_name"] = f"vortex-{name}"
+        # network_name intentionally left unset: auto-derived from the shared
+        # secret so both servers of a pair always land in the same mesh.
         tunnel._config["port"] = self.suggest_listen_port()
         tunnel._config["rpc_port"] = self.suggest_rpc_port()
         return tunnel
