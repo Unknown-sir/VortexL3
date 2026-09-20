@@ -269,6 +269,13 @@ if [ "$TUNNEL_MODE" = "easytier" ]; then
         chmod +x /usr/local/bin/easytier-core
         chmod +x /usr/local/bin/easytier-cli
         echo -e "${GREEN}✓ EasyTier binaries installed (${EASYTIER_ARCH})${NC}"
+        # Verify the binary actually runs (wrong-arch binaries fail here, not later)
+        if /usr/local/bin/easytier-core --version >/dev/null 2>&1; then
+            echo -e "${GREEN}  ✓ Binary check: $(/usr/local/bin/easytier-core --version 2>&1 | head -n1)${NC}"
+        else
+            echo -e "${RED}Error: easytier-core does not run on this machine (wrong architecture?)${NC}"
+            exit 1
+        fi
     else
         echo -e "${RED}Error: EasyTier binaries not found for ${EASYTIER_ARCH}${NC}"
         exit 1

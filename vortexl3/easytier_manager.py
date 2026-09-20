@@ -24,6 +24,44 @@ DEFAULT_LISTEN_PORT = 2070
 RPC_PORT_BASE = 15888
 RPC_PORT_MAX = 15987
 
+# easytier-core --help cache for CLI feature detection.
+# New flags are only passed when the installed binary supports them, so old
+# bundled binaries keep working instead of exiting on unknown arguments
+# (which leaves no TUN interface and no local IP behind).
+_HELP_CACHE: Dict[str, str] = {}
+
+
+def _get_help_text() -> str:
+    """Return `easytier-core --help` output (cached per process)."""
+    if "help" not in _HELP_CACHE:
+        try:
+            result = subprocess.run(
+                [str(EASYTIER_BIN), "--help"],
+                capture_output=True, text=True, timeout=15,
+            )
+            _HELP_CACHE["help"] = (result.stdout or "") + "\n" + (result.stderr or "")
+        except Exception:
+            _HELP_CACHE["help"] = ""
+    return _HELP_CACHE["help"]
+
+
+def _supports(flag: str) -> bool:
+    """Check if the installed easytier-core binary supports a CLI flag."""
+    return flag in _get_help_text()
+
+
+def get_binary_version() -> str:
+    """Return easytier-core version string (best-effort)."""
+    try:
+        result = subprocess.run(
+            [str(EASYTIER_BIN), "--version"],
+            capture_output=True, text=True, timeout=10,
+        )
+        out = ((result.stdout or "") + " " + (result.stderr or "")).strip()
+        return out.split("\n")[0][:120] if out else "unknown"
+    except Exception:
+        return "unknown"
+
 
 class EasyTierConfig:
     """Configuration for an EasyTier tunnel."""
@@ -47,6 +85,9 @@ class EasyTierConfig:
         "compression": "zstd",
         "enable_kcp": True,
         "disable_ipv6": False,
+        # Command profile: "auto" tries full features then falls back to
+        # "minimal" (old-binary compatible). Set automatically on success.
+        "cmd_profile": "auto",
     }
     
     def __init__(self, name: str, config_data: Dict[str, Any] = None, auto_save: bool = True):
@@ -209,6 +250,18 @@ class EasyTierConfig:
     def disable_ipv6(self, value: bool) -> None:
         self._config["disable_ipv6"] = bool(value)
         self._save()
+
+    @property
+    def cmd_profile(self) -> str:
+        """Command profile: 'auto', 'full' or 'minimal'."""
+        profile = self._config.get("cmd_profile", "auto")
+        return profile if profile in ("auto", "full", "minimal") else "auto"
+
+    @cmd_profile.setter
+    def cmd_profile(self, value: str) -> None:
+        if value in ("auto", "full", "minimal"):
+            self._config["cmd_profile"] = value
+            self._save()
     
     @property
     def interface_name(self) -> str:
@@ -264,8 +317,16 @@ class EasyTierConfig:
     def to_dict(self) -> Dict[str, Any]:
         return self._config.copy()
     
-    def get_command_args(self) -> List[str]:
+    def get_command_args(self, profile: str = "full") -> List[str]:
         """Generate command line arguments for easytier-core.
+
+        Profiles:
+        - "full": all performance flags, each included only if the installed
+          binary advertises it in `--help` (UDP listeners/peers, latency-first,
+          zstd, MTU, KCP, network-name, instance-name).
+        - "minimal": v4-compatible set (TCP only) + per-tunnel RPC port.
+          Used automatically when the binary is old or the full profile
+          fails to bring the TUN interface up.
 
         Performance notes (latency / packet-loss fixes):
         - Listen on BOTH tcp and udp so P2P can use UDP (lowest latency).
@@ -278,43 +339,62 @@ class EasyTierConfig:
         - --rpc-portal is unique per tunnel so multiple tunnels can coexist.
         - --network-name isolates each tunnel pair into its own mesh.
         """
-        args = [
-            str(EASYTIER_BIN),
-            "-i", self.local_ip,
-            "--network-name", self.network_name,
-            "--hostname", self.hostname,
-            "-m", self.name,
-            "--network-secret", self.network_secret,
-            "--default-protocol", "udp",
-            "--listeners", f"tcp://0.0.0.0:{self.port}",
-            "--listeners", f"udp://0.0.0.0:{self.port}",
-            "--multi-thread",
-            "--dev-name", self.interface_name,
-            "--mtu", str(self.mtu),
-            "--rpc-portal", f"127.0.0.1:{self.rpc_port}",
-        ]
+        minimal = (profile == "minimal")
 
-        if self.latency_first:
+        def has(flag: str) -> bool:
+            return (not minimal) and _supports(flag)
+
+        args = [str(EASYTIER_BIN), "-i", self.local_ip]
+
+        if has("--network-name"):
+            args.extend(["--network-name", self.network_name])
+
+        args.extend(["--hostname", self.hostname])
+
+        if has("--instance-name"):
+            args.extend(["-m", self.name])
+
+        args.extend(["--network-secret", self.network_secret])
+
+        if has("--default-protocol"):
+            args.extend(["--default-protocol", "udp"])
+
+        args.extend(["--listeners", f"tcp://0.0.0.0:{self.port}"])
+        if has("udp://"):
+            args.extend(["--listeners", f"udp://0.0.0.0:{self.port}"])
+
+        if has("--multi-thread"):
+            args.append("--multi-thread")
+
+        args.extend(["--dev-name", self.interface_name])
+
+        if has("--mtu"):
+            args.extend(["--mtu", str(self.mtu)])
+
+        args.extend(["--rpc-portal", f"127.0.0.1:{self.rpc_port}"])
+
+        if self.latency_first and has("--latency-first"):
             args.append("--latency-first")
 
-        if self.compression and self.compression != "none":
+        if self.compression and self.compression != "none" and has("--compression"):
             args.extend(["--compression", self.compression])
 
-        if self.enable_kcp:
+        if self.enable_kcp and has("--enable-kcp-proxy"):
             args.append("--enable-kcp-proxy")
 
-        if self.disable_ipv6:
+        if self.disable_ipv6 and has("--disable-ipv6"):
             args.append("--disable-ipv6")
 
         if self.peer_ip:
-            args.extend(["--peers", f"tcp://{self.peer_ip}:{self.port}",
-                         f"udp://{self.peer_ip}:{self.port}"])
+            args.extend(["--peers", f"tcp://{self.peer_ip}:{self.port}"])
+            if has("udp://"):
+                args.extend(["--peers", f"udp://{self.peer_ip}:{self.port}"])
 
         return args
-    
-    def get_command_string(self) -> str:
+
+    def get_command_string(self, profile: str = "full") -> str:
         """Get full command as string."""
-        return " ".join(self.get_command_args())
+        return " ".join(self.get_command_args(profile=profile))
 
 
 class EasyTierManager:
@@ -357,10 +437,44 @@ class EasyTierManager:
         """Check if tunnel interface exists."""
         success, stdout, _ = self._run_command(f"ip link show {self.config.interface_name}")
         return success
-    
-    def _create_service_file(self) -> Tuple[bool, str]:
+
+    def check_interface(self) -> Tuple[bool, bool, bool]:
+        """Check TUN interface state.
+
+        Returns:
+            (exists, has_any_ip, has_configured_ip)
+        """
+        success, stdout, _ = self._run_command(f"ip addr show {self.config.interface_name}")
+        if not success or not stdout:
+            return False, False, False
+        has_ip = "inet " in stdout
+        want = self.config.local_ip.split('/')[0] if self.config.local_ip else ""
+        has_ours = bool(want) and want in stdout
+        return True, has_ip, has_ours
+
+    def wait_for_interface(self, timeout: int = 20) -> Tuple[bool, bool, bool]:
+        """Wait until the TUN interface exists and has an IP (poll each second)."""
+        import time
+        state: Tuple[bool, bool, bool] = (False, False, False)
+        for _ in range(max(1, timeout)):
+            state = self.check_interface()
+            if state[0] and state[1]:
+                return state
+            time.sleep(1)
+        return state
+
+    def get_service_logs(self, lines: int = 25) -> str:
+        """Return recent journal logs for this tunnel's service (diagnostics)."""
+        success, stdout, stderr = self._run_command(
+            f"journalctl -u {self._service_name} -n {lines} --no-pager 2>&1"
+        )
+        out = (stdout or "") + (stderr or "")
+        return out.strip()[-3000:] if out.strip() else "No journal logs available"
+
+    def _create_service_file(self, cmd: str = None) -> Tuple[bool, str]:
         """Create systemd service file for this tunnel."""
-        cmd = self.config.get_command_string()
+        if cmd is None:
+            cmd = self.config.get_command_string()
 
         service_content = f"""[Unit]
 Description=VortexL3 EasyTier Tunnel - {self.config.name}
@@ -392,7 +506,13 @@ WantedBy=multi-user.target
             return False, f"Failed to create service: {e}"
     
     def start_tunnel(self) -> Tuple[bool, str]:
-        """Start the EasyTier tunnel."""
+        """Start the EasyTier tunnel.
+
+        Writes the service file, starts it, then VERIFIES that the TUN
+        interface actually came up with our local IP. If the full-featured
+        command fails (e.g. old binary without new flags), it automatically
+        retries with the minimal v4-compatible profile.
+        """
         if not self.check_easytier_installed():
             return False, "EasyTier binary not found at /usr/local/bin/easytier-core"
 
@@ -402,19 +522,50 @@ WantedBy=multi-user.target
         # Open firewall for both TCP and UDP listeners (idempotent)
         self._ensure_firewall()
 
-        # Create/update service file
-        success, msg = self._create_service_file()
-        if not success:
-            return False, msg
-        
-        # Enable and start service
-        self._run_command(f"systemctl enable {self._service_name}")
-        success, _, stderr = self._run_command(f"systemctl start {self._service_name}")
-        
-        if not success:
-            return False, f"Failed to start tunnel: {stderr}"
-        
-        return True, f"EasyTier tunnel '{self.config.name}' started"
+        version = get_binary_version()
+        pinned = self.config.cmd_profile
+        order = ["full", "minimal"] if pinned in ("auto", "full") else ["minimal", "full"]
+
+        last_logs = ""
+        for profile in order:
+            cmd = self.config.get_command_string(profile=profile)
+            success, msg = self._create_service_file(cmd)
+            if not success:
+                return False, msg
+
+            # Enable and (re)start service
+            self._run_command(f"systemctl enable {self._service_name}")
+            success, _, stderr = self._run_command(f"systemctl restart {self._service_name}")
+            if not success:
+                success, _, stderr = self._run_command(f"systemctl start {self._service_name}")
+                if not success:
+                    last_logs = self.get_service_logs()
+                    continue  # try next profile
+
+            exists, has_ip, has_ours = self.wait_for_interface(timeout=20)
+            if exists and has_ip:
+                self.config.cmd_profile = profile
+                detail = (
+                    f"Interface {self.config.interface_name} is UP "
+                    f"({self.config.local_ip} {'assigned' if has_ours else 'present (IP differs from config!)'})"
+                )
+                note = "" if profile == "full" else (
+                    " [compatibility profile: binary lacks new flags, consider upgrading easytier-core]"
+                )
+                return True, (
+                    f"EasyTier tunnel '{self.config.name}' started "
+                    f"(binary: {version}, profile: {profile}){note}\n{detail}"
+                )
+            last_logs = self.get_service_logs()
+
+        return False, (
+            f"EasyTier tunnel '{self.config.name}' failed: TUN interface "
+            f"'{self.config.interface_name}' did not come up with IP {self.config.local_ip} "
+            f"(binary: {version}).\n"
+            f"--- service logs ---\n{last_logs}\n"
+            f"Hint: check that UDP/TCP port {self.config.port} is free, the binary is executable, "
+            f"and TUN device creation is allowed on this host."
+        )
     
     def stop_tunnel(self) -> Tuple[bool, str]:
         """Stop the EasyTier tunnel."""
@@ -423,23 +574,22 @@ WantedBy=multi-user.target
         return True, f"EasyTier tunnel '{self.config.name}' stopped"
     
     def restart_tunnel(self) -> Tuple[bool, str]:
-        """Restart the EasyTier tunnel."""
-        # Update service file first
-        self._create_service_file()
-        success, _, stderr = self._run_command(f"systemctl restart {self._service_name}")
-        
-        if not success:
-            return False, f"Failed to restart tunnel: {stderr}"
-        
-        return True, f"EasyTier tunnel '{self.config.name}' restarted"
-    
+        """Restart the EasyTier tunnel (regenerates service file, verifies interface)."""
+        return self.start_tunnel()
+
     def get_status(self) -> Tuple[bool, str]:
-        """Get tunnel status."""
+        """Get tunnel status (service state + TUN interface state)."""
         success, stdout, stderr = self._run_command(f"systemctl is-active {self._service_name}")
         is_active = success and "active" in stdout
-        
-        if is_active:
+
+        exists, has_ip, has_ours = self.check_interface()
+
+        if is_active and exists and has_ip:
             return True, "Running"
+        if is_active and exists and not has_ip:
+            return False, "Service active but TUN has no IP"
+        if is_active:
+            return False, "Service active but TUN interface missing"
         else:
             return False, "Stopped"
     
