@@ -1,6 +1,6 @@
-# HAProxy Port Forwarding for VortexL3 v2.0
+# HAProxy Port Forwarding for VortexL3 v5.0.0
 
-VortexL3 v2.0 uses **HAProxy** for production-grade, high-performance port forwarding.
+VortexL3 v5.0.0 uses **HAProxy** for production-grade, high-performance port forwarding.
 
 ## Why HAProxy?
 

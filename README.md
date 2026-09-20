@@ -72,7 +72,7 @@ sudo vortexl3
 | Tunnel IP | 10.155.155.1 | 10.155.155.2 |
 | Peer IP | (Kharej public) | (Iran public) |
 | Port | 2070 | 2070 |
-| Secret | vortexl3 | vortexl3 |
+| Secret | vortexl2 | vortexl2 |
 
 ## 🔧 Services
 
