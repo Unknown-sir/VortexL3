@@ -117,6 +117,23 @@ input:focus,select:focus{border-color:var(--neon);box-shadow:0 0 12px rgba(0,240
   padding:12px;margin-top:14px;max-height:220px;overflow:auto;display:none}
 .hidden{display:none!important}
 a{color:var(--neon)}
+#tabs{margin:14px 0 2px}
+.tab{opacity:.65}
+.tab.active{opacity:1;box-shadow:0 0 14px rgba(0,240,255,.4)}
+table.sv{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+table.sv td,table.sv th{border-bottom:1px solid rgba(0,240,255,.12);padding:8px 6px;text-align:left}
+table.sv th{color:var(--dim);font-size:11px;letter-spacing:2px}
+.pill{display:inline-block;border-radius:999px;padding:2px 12px;font-size:11px;letter-spacing:2px}
+.pill.on{color:var(--lime);border:1px solid rgba(182,255,0,.5)}
+.pill.off{color:var(--red);border:1px solid rgba(255,51,85,.5)}
+.pill.na{color:var(--dim);border:1px solid rgba(107,122,153,.5)}
+.logview{white-space:pre-wrap;font-family:Consolas,monospace;font-size:12px;color:var(--txt);
+  background:#02020a;border:1px solid var(--line);border-radius:10px;
+  padding:12px;margin-top:12px;max-height:320px;overflow:auto}
+.prog{height:10px;border:1px solid var(--line);border-radius:999px;margin-top:12px;overflow:hidden}
+.prog div{height:100%;width:0;background:linear-gradient(90deg,var(--neon),var(--pink));
+  box-shadow:0 0 12px var(--neon);transition:width .4s}
+select{max-width:100%}
 </style>
 </head>
 <body>
@@ -154,6 +171,14 @@ a{color:var(--neon)}
       </div>
     </div>
 
+    <div class="topbar" id="tabs">
+      <button class="btn tab active" onclick="showTab('tunnels',this)">TUNNELS</button>
+      <button class="btn tab" onclick="showTab('system',this)">SYSTEM</button>
+      <button class="btn tab" onclick="showTab('network',this)">NETWORK</button>
+      <button class="btn tab" onclick="showTab('panel',this)">PANEL</button>
+    </div>
+
+    <div id="sec-tunnels">
     <div class="cards">
       <div class="stat"><div class="k">TOTAL</div><div class="v" id="s-total">0</div></div>
       <div class="stat"><div class="k">ONLINE</div><div class="v" id="s-on" style="color:var(--lime)">0</div></div>
@@ -163,7 +188,84 @@ a{color:var(--neon)}
 
     <div id="tunnels"></div>
     <div id="log"></div>
-  </div>
+    </div><!-- /sec-tunnels -->
+
+    <div id="sec-system" class="hidden">
+      <div class="tun"><div class="tun-head"><span class="tname">SERVICES</span>
+        <span class="tstatus"><button class="btn ghost" onclick="loadHealth()">REFRESH</button></span></div>
+        <div class="tun-body" id="health"></div></div>
+      <div class="tun"><div class="tun-head"><span class="tname">LOGS</span></div>
+        <div class="tun-body">
+          <div class="rowbtns">
+            <select id="log-svc" style="max-width:300px"></select>
+            <select id="log-lines" style="max-width:120px">
+              <option value="50">50</option><option value="100" selected>100</option>
+              <option value="200">200</option><option value="500">500</option>
+            </select>
+            <button class="btn" onclick="loadLogs()">LOAD ▸</button>
+          </div>
+          <div id="logview" class="logview">Select a service and hit LOAD.</div>
+        </div></div>
+    </div>
+
+    <div id="sec-network" class="hidden">
+      <div class="tun"><div class="tun-head"><span class="tname">FORWARD ENGINE</span></div>
+        <div class="tun-body">
+          <div class="kv"><div>MODE <b id="fw-mode">-</b></div></div>
+          <div class="rowbtns">
+            <button class="btn" onclick="setMode('haproxy')">HAPROXY</button>
+            <button class="btn" onclick="setMode('socat')">SOCAT</button>
+            <button class="btn danger" onclick="setMode('none')">DISABLE</button>
+            <button class="btn ghost" onclick="fwRestart()">RESTART</button>
+            <button class="btn ghost" onclick="fwValidate()">VALIDATE</button>
+          </div>
+        </div></div>
+      <div class="tun"><div class="tun-head"><span class="tname">AUTO-RESTART CRON</span></div>
+        <div class="tun-body" id="cronbox"></div></div>
+      <div class="tun"><div class="tun-head"><span class="tname">TCP OPTIMIZATION</span></div>
+        <div class="tun-body">
+          <div class="kv" id="tcpbox"></div>
+          <div class="rowbtns"><button class="btn pink" onclick="applyTcp()">APPLY OPTIMIZATION ▸</button>
+          <button class="btn ghost" onclick="loadTcp()">REFRESH</button></div>
+        </div></div>
+      <div class="tun"><div class="tun-head"><span class="tname">DNS MANAGER</span></div>
+        <div class="tun-body">
+          <div class="kv" id="dnsbox"></div>
+          <div class="rowbtns">
+            <button class="btn pink" onclick="startScan()">SCAN &amp; APPLY BEST DNS ▸</button>
+            <button class="btn ghost" onclick="loadDns()">REFRESH</button>
+          </div>
+          <div id="scanbar" class="prog hidden"><div id="scanfill"></div></div>
+          <div id="scanres" class="fwds" style="margin-top:8px"></div>
+          <div class="rowbtns">
+            <input id="dns-hours" placeholder="hours (1-72)" style="max-width:150px">
+            <button class="btn ghost" onclick="setDnsHours()">SET INTERVAL</button>
+            <button class="btn ghost" onclick="dnsAuto('enable')">AUTO-CHECK ON</button>
+            <button class="btn danger" onclick="dnsAuto('disable')">AUTO-CHECK OFF</button>
+          </div>
+        </div></div>
+    </div>
+
+    <div id="sec-panel" class="hidden">
+      <div class="tun"><div class="tun-head"><span class="tname">ACCESS</span></div>
+        <div class="tun-body"><div class="kv" id="panelbox"></div>
+          <div class="rowbtns"><button class="btn ghost" onclick="loadPanelInfo()">REFRESH</button></div>
+        </div></div>
+      <div class="tun"><div class="tun-head"><span class="tname">CHANGE PASSWORD</span></div>
+        <div class="tun-body">
+          <label>CURRENT PASSWORD</label><input id="pw-cur" type="password">
+          <label>NEW PASSWORD (min 8 chars)</label><input id="pw-new" type="password">
+          <div class="rowbtns"><button class="btn pink" onclick="changePw()">CHANGE ▸</button></div>
+        </div></div>
+      <div class="tun"><div class="tun-head"><span class="tname">CHANGE PORT</span></div>
+        <div class="tun-body">
+          <label>NEW PORT (1-65535, must be free)</label><input id="p-port" placeholder="e.g. 32410">
+          <div class="hint">Panel restarts after the change — reconnect via the new URL.</div>
+          <div class="rowbtns"><button class="btn pink" onclick="changePort()">CHANGE &amp; RESTART ▸</button></div>
+          <div id="reconnect" class="hidden" style="margin-top:10px"></div>
+        </div></div>
+    </div>
+</div>
 </div>
 
 <!-- CREATE MODAL -->
@@ -379,6 +481,178 @@ async function doFw(how){
       toast('Forwards updated ✓');refresh();}
     else{e.textContent=r.message||r.error;e.style.display='block';}
   }catch(err){e.textContent=err.message;e.style.display='block';}
+}
+function showTab(n,btn){
+  ['tunnels','system','network','panel'].forEach(x=>
+    document.getElementById('sec-'+x).classList.toggle('hidden',x!==n));
+  document.querySelectorAll('#tabs .tab').forEach(b=>b.classList.remove('active'));
+  if(btn)btn.classList.add('active');
+  if(n==='system'){loadHealth();}
+  if(n==='network'){loadMode();loadCron();loadTcp();loadDns();}
+  if(n==='panel'){loadPanelInfo();}
+}
+/* ---- system ---- */
+async function loadHealth(){
+  try{const r=await api('/api/health');
+    if(!r.ok){toast('Health failed',false);return;}
+    let h='<table class="sv"><tr><th>SERVICE</th><th>STATE</th><th>ACTIONS</th></tr>';
+    r.services.forEach(s=>{
+      const pill=s.active?'<span class="pill on">ACTIVE</span>'
+        :(s.state==='unknown'?'<span class="pill na">UNKNOWN</span>':'<span class="pill off">'+esc(s.state.toUpperCase())+'</span>');
+      h+=`<tr><td>${esc(s.label)}<br><span class="hint">${esc(s.service)}</span></td><td>${pill}</td>
+        <td><button class="btn ghost" onclick="svcAct('${esc(s.service)}','start')">START</button>
+        <button class="btn ghost" onclick="svcAct('${esc(s.service)}','restart')">RESTART</button>
+        <button class="btn danger" onclick="svcAct('${esc(s.service)}','stop')">STOP</button></td></tr>`;
+    });
+    document.getElementById('health').innerHTML=h+'</table>';
+  }catch(err){toast(err.message,false);}
+}
+async function svcAct(svc,action){
+  toast(action.toUpperCase()+' '+svc+' …');
+  try{const r=await api('/api/service/action',{service:svc,action});
+    log('['+action.toUpperCase()+'] '+svc+'\n'+(r.message||r.error||''));
+    toast(r.ok?'Done ✓':'Failed ✗',r.ok);loadHealth();
+  }catch(err){toast(err.message,false);}
+}
+async function loadLogs(){
+  const svc=document.getElementById('log-svc').value;
+  const lines=document.getElementById('log-lines').value;
+  const box=document.getElementById('logview');box.textContent='Loading…';
+  try{const r=await api('/api/logs?service='+encodeURIComponent(svc)+'&lines='+lines);
+    box.textContent=r.ok?r.output:('Error: '+(r.error||'failed'));
+    if(r.services){const sel=document.getElementById('log-svc');
+      if(!sel.options.length){r.services.forEach(s=>{const o=document.createElement('option');
+        o.value=s;o.textContent=s;sel.appendChild(o);});}}
+  }catch(err){box.textContent='Error: '+err.message;}
+}
+/* ---- network: forwards ---- */
+async function loadMode(){
+  try{const r=await api('/api/forward/mode');
+    if(r.ok)document.getElementById('fw-mode').textContent=r.mode.toUpperCase();
+  }catch(err){toast(err.message,false);}
+}
+async function setMode(m){
+  toast('MODE → '+m.toUpperCase()+' …');
+  try{const r=await api('/api/forward/mode',{mode:m});
+    log('[FORWARD MODE]\n'+(r.message||r.error||''));toast(r.ok?'Done ✓':'Failed ✗',r.ok);loadMode();
+  }catch(err){toast(err.message,false);}
+}
+async function fwRestart(){
+  try{const r=await api('/api/forward/restart',{});toast(r.message||'done',r.ok);}catch(err){toast(err.message,false);}
+}
+async function fwValidate(){
+  try{const r=await api('/api/forward/validate',{});
+    log('[VALIDATE]\n'+(r.message||r.error||''));toast(r.ok?'Valid ✓':'Failed ✗',r.ok);
+  }catch(err){toast(err.message,false);}
+}
+/* ---- network: cron ---- */
+function cronRow(title,key,st,intervals){
+  const opts=intervals.map(i=>`<option value="${i}"${(''+i===String(st._sel||60))?' selected':''}>every ${i===60?'hour':i+' min'}</option>`).join('');
+  return `<div style="margin:8px 0"><b>${title}</b> — ${st.enabled?'<span class="pill on">'+esc(st.schedule)+'</span>':'<span class="pill off">DISABLED</span>'}
+    <div class="rowbtns"><select id="cron-${key}" style="max-width:170px">${opts}</select>
+    <button class="btn ghost" onclick="cronSet('${key}','enable')">ENABLE</button>
+    <button class="btn danger" onclick="cronSet('${key}','disable')">DISABLE</button></div></div>`;
+}
+async function loadCron(){
+  try{const r=await api('/api/cron/status');
+    if(!r.ok)return;
+    document.getElementById('cronbox').innerHTML=
+      cronRow('PORT FORWARDS','forward',r.forward,r.intervals)+
+      cronRow('EASYTier TUNNELS','easytier',r.easytier,r.intervals);
+  }catch(err){toast(err.message,false);}
+}
+async function cronSet(kind,action){
+  const iv=document.getElementById('cron-'+kind).value;
+  try{const r=await api('/api/cron/'+kind,{action,interval:parseInt(iv,10)});
+    toast(r.message||'done',r.ok);loadCron();
+  }catch(err){toast(err.message,false);}
+}
+/* ---- network: tcp ---- */
+async function loadTcp(){
+  try{const r=await api('/api/tcp/status');
+    if(!r.ok){toast('TCP status failed',false);return;}
+    document.getElementById('tcpbox').innerHTML=Object.entries(r.params)
+      .map(([k,v])=>`<div>${esc(k.split('.').pop())} <b>${esc(v)}</b></div>`).join('');
+  }catch(err){toast(err.message,false);}
+}
+async function applyTcp(){
+  toast('Applying TCP optimization …');
+  try{const r=await api('/api/tcp/apply',{});
+    log('[TCP OPTIMIZATION]\n'+(r.message||r.error||''));toast(r.ok?'Applied ✓':'Failed ✗',r.ok);loadTcp();
+  }catch(err){toast(err.message,false);}
+}
+/* ---- network: dns ---- */
+async function loadDns(){
+  try{const r=await api('/api/dns/status');
+    if(!r.ok)return;
+    document.getElementById('dnsbox').innerHTML=
+      `<div>SYSTEM DNS <b>${esc(r.system_dns||'-')}</b></div>
+       <div>ACTIVE <b>${esc(r.configured_dns||'-')}${r.configured_name?' ('+esc(r.configured_name)+')':''}</b></div>
+       <div>LAST CHECK <b>${esc(r.last_check||'-')}</b></div>
+       <div>AUTO-CHECK <b>${r.auto_check.enabled?esc(r.auto_check.schedule):'DISABLED'}</b> (every ${esc(r.interval_hours)}h)</div>`;
+  }catch(err){toast(err.message,false);}
+}
+let SCAN_TIMER=null;
+async function startScan(){
+  try{const r=await api('/api/dns/scan',{});
+    if(!r.ok){toast(r.message||'Scan failed',false);return;}
+    toast('DNS scan running …');document.getElementById('scanbar').classList.remove('hidden');
+    document.getElementById('scanres').textContent='';
+    clearInterval(SCAN_TIMER);SCAN_TIMER=setInterval(pollScan,2500);pollScan();
+  }catch(err){toast(err.message,false);}
+}
+async function pollScan(){
+  try{const r=await api('/api/dns/scan');
+    if(!r.ok)return;
+    const total=r.total||1, done=(r.progress||[]).length;
+    document.getElementById('scanfill').style.width=Math.min(100,Math.round(done/total*100))+'%';
+    if(r.done){clearInterval(SCAN_TIMER);
+      const best=r.best?`BEST: ${esc(r.best.name)} (${esc(r.best.ip)}) — ${esc(r.best.score)}ms`:'';
+      document.getElementById('scanres').innerHTML=
+        `<b>${r.success?'✓ APPLIED':'✗ FAILED'}</b> ${esc(r.message||'')}<br>${best}`;
+      toast(r.success?'Best DNS applied ✓':'Scan failed ✗',r.success);loadDns();
+    }else{
+      const last=(r.progress||[]).slice(-3).map(p=>`${esc(p.name)} ${esc(p.ip)}: ${p.status==='ok'?esc(p.score)+'ms':'fail'}`).join(' · ');
+      document.getElementById('scanres').textContent=`Scanning… ${done}/${total} — ${last}`;
+    }
+  }catch(err){clearInterval(SCAN_TIMER);}
+}
+async function setDnsHours(){
+  const h=parseInt(document.getElementById('dns-hours').value,10);
+  try{const r=await api('/api/dns/interval',{hours:h});toast(r.message||'done',r.ok);loadDns();
+  }catch(err){toast(err.message,false);}
+}
+async function dnsAuto(a){
+  try{const r=await api('/api/dns/autocheck',{action:a});toast(r.message||'done',r.ok);loadDns();
+  }catch(err){toast(err.message,false);}
+}
+/* ---- panel self-manage ---- */
+async function loadPanelInfo(){
+  try{const r=await api('/api/panel/info');
+    if(!r.ok)return;
+    document.getElementById('panelbox').innerHTML=
+      `<div>URL <b>${esc(r.url)}</b></div><div>USERNAME <b>${esc(r.username)}</b></div>
+       <div>PORT <b>${esc(r.port)}</b></div><div>VERSION <b>${esc(r.version)}</b></div>`;
+  }catch(err){toast(err.message,false);}
+}
+async function changePw(){
+  const cur=document.getElementById('pw-cur').value, nw=document.getElementById('pw-new').value;
+  try{const r=await api('/api/panel/password',{current:cur,new:nw});
+    toast(r.message||r.error||'done',r.ok);
+    if(r.ok){document.getElementById('pw-cur').value='';document.getElementById('pw-new').value='';}
+  }catch(err){toast(err.message,false);}
+}
+async function changePort(){
+  const p=parseInt(document.getElementById('p-port').value,10);
+  if(!p){toast('Enter a port',false);return;}
+  if(!confirm('Panel will restart on port '+p+'. Continue?'))return;
+  try{const r=await api('/api/panel/port',{port:p});
+    if(r.ok){document.getElementById('reconnect').classList.remove('hidden');
+      document.getElementById('reconnect').innerHTML=
+        `Panel restarting… reconnect in ~10s: <a href="${esc(r.reconnect_url)}">${esc(r.reconnect_url)}</a>`;
+      toast('Restarting panel …',true);
+    }else toast(r.message||r.error||'failed',false);
+  }catch(err){toast(err.message,false);}
 }
 refresh().catch(()=>{});
 </script>

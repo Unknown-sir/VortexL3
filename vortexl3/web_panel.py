@@ -30,12 +30,15 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 import yaml
 
 from . import __version__
+from . import cron_manager
+from . import dns_manager
 from .config import ConfigManager, GlobalConfig, TunnelConfig
+from .tcp_optimizer import TCPOptimizer, setup_tcp_optimization
 from .tunnel import TunnelManager
 from .haproxy_manager import HAProxyManager
 
@@ -666,6 +669,322 @@ def forwards_modify(name: str, ports_str: str, add: bool) -> tuple:
 
 
 # ----------------------------------------------------------------------------
+# Logs
+# ----------------------------------------------------------------------------
+
+def allowed_log_services() -> list:
+    """Services allowed for log viewing (strict allowlist)."""
+    services = ["vortexl3-panel", "vortexl3-forward-daemon", "vortexl3-watchdog", "haproxy"]
+    try:
+        if get_mode() == "easytier":
+            from .easytier_manager import EasyTierConfigManager
+            for name in EasyTierConfigManager().list_tunnels():
+                services.append(f"vortexl3-easytier-{sanitize_name(name)}")
+        else:
+            services.append("vortexl3-tunnel")
+    except Exception:  # noqa: BLE001
+        pass
+    return services
+
+
+def get_service_logs_any(service: str, lines: int = 100) -> tuple:
+    """Return journal logs for an allowlisted service."""
+    import re
+    service = (service or "").strip()
+    try:
+        lines = max(10, min(500, int(lines)))
+    except (TypeError, ValueError):
+        lines = 100
+    if not re.fullmatch(r"[a-z0-9@*._-]+", service) or service not in allowed_log_services():
+        return False, "Unknown service"
+    ok, out, err = run_command(f"journalctl -u {service} -n {lines} --no-pager 2>&1")
+    text = (out or err or "").strip()
+    return True, text if text else "No logs available (service may be inactive)"
+
+
+# ----------------------------------------------------------------------------
+# Forward mode
+# ----------------------------------------------------------------------------
+
+def get_forward_mode_info() -> str:
+    from .forward import get_forward_mode
+    try:
+        return get_forward_mode()
+    except Exception:  # noqa: BLE001
+        return "none"
+
+
+def set_forward_mode_api(mode: str) -> tuple:
+    """Change forward mode (mirrors TUI transitions)."""
+    from .forward import set_forward_mode, get_forward_mode
+    mode = (mode or "").lower()
+    if mode not in ("none", "haproxy", "socat"):
+        return False, "Mode must be none, haproxy or socat"
+    try:
+        current = get_forward_mode()
+        if mode == current:
+            return True, f"Forward mode is already {mode.upper()}"
+        if current == "haproxy":
+            run_command("systemctl stop haproxy")
+        elif current == "socat":
+            try:
+                from .socat_manager import stop_all_socat
+                stop_all_socat()
+            except Exception:  # noqa: BLE001
+                run_command("pkill -f 'socat.*TCP-LISTEN'")
+        set_forward_mode(mode)
+        if mode != "none":
+            run_command(f"systemctl restart {FORWARD_DAEMON_SERVICE}")
+        else:
+            run_command("systemctl stop haproxy")
+        return True, f"Forward mode changed to {mode.upper()}"
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Set forward mode failed")
+        return False, f"Error: {e}"
+
+
+def restart_forwards_api() -> tuple:
+    run_command(f"systemctl restart {FORWARD_DAEMON_SERVICE}")
+    return True, "Forward daemon restarted"
+
+
+def validate_forwards_api() -> tuple:
+    """Validate HAProxy config and reload (socat: no-op)."""
+    try:
+        from .forward import get_forward_manager, get_forward_mode
+        mode = get_forward_mode()
+        if mode == "none":
+            return False, "Port forwarding is disabled (mode: none)"
+        mgr = get_forward_manager(None)
+        if not mgr:
+            return False, "No forward manager available"
+        return mgr.validate_and_reload()
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Validate forwards failed")
+        return False, f"Error: {e}"
+
+
+# ----------------------------------------------------------------------------
+# System health / services
+# ----------------------------------------------------------------------------
+
+BASE_HEALTH_SERVICES = [
+    ("vortexl3-tunnel", "L2TPv3 Tunnel"),
+    ("vortexl3-forward-daemon", "Port Forward Daemon"),
+    ("vortexl3-panel", "Web Panel"),
+    ("vortexl3-watchdog", "Watchdog"),
+    ("haproxy", "HAProxy"),
+]
+
+
+def health_services() -> list:
+    """All monitored services with live state."""
+    services = list(BASE_HEALTH_SERVICES)
+    try:
+        if get_mode() == "easytier":
+            from .easytier_manager import EasyTierConfigManager
+            for name in EasyTierConfigManager().list_tunnels():
+                services.append((f"vortexl3-easytier-{sanitize_name(name)}", f"EasyTier: {name}"))
+    except Exception:  # noqa: BLE001
+        pass
+    result = []
+    for unit, label in services:
+        ok, out, _ = run_command(f"systemctl is-active {unit} 2>&1")
+        state = (out or "").strip() if ok else "unknown"
+        if not ok and not out:
+            state = "unknown"
+        result.append({"service": unit, "label": label, "state": state,
+                       "active": state == "active"})
+    return result
+
+
+def service_action_api(service: str, action: str) -> tuple:
+    """Start / restart / stop an allowlisted service."""
+    service = (service or "").strip()
+    action = (action or "").lower()
+    allowed = [s for s, _ in BASE_HEALTH_SERVICES] + allowed_log_services()
+    if service not in allowed:
+        return False, "Unknown service"
+    if action not in ("start", "restart", "stop"):
+        return False, "Action must be start, restart or stop"
+    ok, out, err = run_command(f"systemctl {action} {service}")
+    if ok:
+        return True, f"{service} {action}ed"
+    return False, (err or out or "Command failed")[:500]
+
+
+# ----------------------------------------------------------------------------
+# Auto-restart cron
+# ----------------------------------------------------------------------------
+
+CRON_INTERVALS = (5, 15, 30, 60)
+
+
+def cron_status_api() -> dict:
+    try:
+        fwd_on, fwd_sched = cron_manager.get_auto_restart_status()
+    except Exception:  # noqa: BLE001
+        fwd_on, fwd_sched = False, "Unknown"
+    try:
+        et_on, et_sched = cron_manager.get_easytier_cron_status()
+    except Exception:  # noqa: BLE001
+        et_on, et_sched = False, "Unknown"
+    return {
+        "forward": {"enabled": fwd_on, "schedule": fwd_sched},
+        "easytier": {"enabled": et_on, "schedule": et_sched},
+        "intervals": list(CRON_INTERVALS),
+    }
+
+
+def cron_set_api(kind: str, action: str, interval: int = 60) -> tuple:
+    """Enable/disable auto-restart cron for 'forward' or 'easytier'."""
+    action = (action or "").lower()
+    try:
+        interval = int(interval)
+    except (TypeError, ValueError):
+        interval = 60
+    if interval not in CRON_INTERVALS:
+        return False, f"Interval must be one of {list(CRON_INTERVALS)} minutes"
+    try:
+        if kind == "forward":
+            if action == "enable":
+                return cron_manager.add_auto_restart_cron(interval)
+            if action == "disable":
+                return cron_manager.remove_auto_restart_cron()
+        elif kind == "easytier":
+            if action == "enable":
+                return cron_manager.add_easytier_cron(interval)
+            if action == "disable":
+                return cron_manager.remove_easytier_cron()
+        return False, "Invalid kind/action"
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Cron update failed")
+        return False, f"Error: {e}"
+
+
+# ----------------------------------------------------------------------------
+# TCP optimization
+# ----------------------------------------------------------------------------
+
+TCP_STATUS_KEYS = [
+    "net.ipv4.tcp_congestion_control",
+    "net.core.rmem_max",
+    "net.core.wmem_max",
+    "net.ipv4.ip_forward",
+    "net.ipv4.tcp_fastopen",
+]
+
+
+def tcp_status_api() -> dict:
+    try:
+        current = TCPOptimizer().get_current_params(TCP_STATUS_KEYS)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "params": current}
+
+
+def tcp_apply_api() -> tuple:
+    try:
+        return setup_tcp_optimization()
+    except Exception as e:  # noqa: BLE001
+        logger.exception("TCP optimization failed")
+        return False, f"Error: {e}"
+
+
+# ----------------------------------------------------------------------------
+# DNS manager (background scan with progress)
+# ----------------------------------------------------------------------------
+
+_dns_scan = {"running": False, "progress": [], "done": False,
+             "success": None, "message": "", "best": None, "started": ""}
+_dns_lock = threading.Lock()
+
+
+def _dns_scan_worker() -> None:
+    def callback(name, ip, status, score):
+        with _dns_lock:
+            if len(_dns_scan["progress"]) < 500:
+                _dns_scan["progress"].append(
+                    {"name": name, "ip": ip, "status": status, "score": score})
+    try:
+        ok, msg, best = dns_manager.scan_and_apply_best_dns(callback=callback)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("DNS scan failed")
+        ok, msg, best = False, f"Error: {e}", None
+    with _dns_lock:
+        _dns_scan.update({"running": False, "done": True,
+                          "success": ok, "message": msg, "best": best})
+
+
+def dns_scan_start_api() -> tuple:
+    with _dns_lock:
+        if _dns_scan["running"]:
+            return False, "A scan is already running"
+        _dns_scan.update({"running": True, "progress": [], "done": False,
+                          "success": None, "message": "", "best": None,
+                          "started": time.strftime("%Y-%m-%d %H:%M:%S")})
+    thread = threading.Thread(target=_dns_scan_worker, daemon=True)
+    thread.start()
+    return True, "DNS scan started"
+
+
+def dns_scan_state_api() -> dict:
+    with _dns_lock:
+        state = dict(_dns_scan)
+    state["total"] = len(dns_manager.normalize_dns_list(dns_manager.RAW_DNS_LIST))
+    return state
+
+
+def dns_status_api() -> dict:
+    try:
+        current = dns_manager.get_current_system_dns()
+    except Exception:  # noqa: BLE001
+        current = None
+    try:
+        config = dns_manager.get_dns_config()
+    except Exception:  # noqa: BLE001
+        config = {}
+    try:
+        cron_on, cron_sched = dns_manager.get_dns_cron_status()
+    except Exception:  # noqa: BLE001
+        cron_on, cron_sched = False, "Unknown"
+    return {
+        "system_dns": current,
+        "configured_dns": config.get("current_dns"),
+        "configured_name": config.get("current_dns_name"),
+        "last_check": config.get("last_check"),
+        "interval_hours": config.get("check_interval_hours", 4),
+        "auto_check": {"enabled": cron_on, "schedule": cron_sched},
+    }
+
+
+def dns_interval_api(hours) -> tuple:
+    try:
+        hours = int(hours)
+    except (TypeError, ValueError):
+        return False, "Invalid interval"
+    if not 1 <= hours <= 72:
+        return False, "Interval must be 1-72 hours"
+    try:
+        return dns_manager.set_check_interval(hours)
+    except Exception as e:  # noqa: BLE001
+        return False, f"Error: {e}"
+
+
+def dns_autocheck_api(action: str) -> tuple:
+    action = (action or "").lower()
+    try:
+        if action == "enable":
+            hours = dns_manager.get_check_interval()
+            return dns_manager.update_dns_cron(hours)
+        if action == "disable":
+            return dns_manager.remove_dns_cron()
+        return False, "Action must be enable or disable"
+    except Exception as e:  # noqa: BLE001
+        return False, f"Error: {e}"
+
+
+# ----------------------------------------------------------------------------
 # HTTP layer
 # ----------------------------------------------------------------------------
 
@@ -733,15 +1052,16 @@ class PanelHandler(BaseHTTPRequestHandler):
 
     # -- routes ----------------------------------------------------------
     def do_GET(self):  # noqa: N802
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         if path in ("/", "/login", "/dashboard"):
             self._serve_page()
             return
-        if path == "/api/summary":
-            if not self._session_user():
-                _json_response(self, 401, {"ok": False, "error": "Unauthorized"})
-                return
-            try:
+        if not self._session_user():
+            _json_response(self, 401, {"ok": False, "error": "Unauthorized"})
+            return
+        try:
+            if path == "/api/summary":
                 _json_response(self, 200, {
                     "ok": True,
                     "mode": get_mode(),
@@ -749,24 +1069,39 @@ class PanelHandler(BaseHTTPRequestHandler):
                     "server_ip": get_server_ip(),
                     "tunnels": list_tunnels(),
                 })
-            except Exception as e:  # noqa: BLE001
-                logger.exception("summary failed")
-                _json_response(self, 500, {"ok": False, "error": str(e)})
-            return
-        if path == "/api/panel/info":
-            if not self._session_user():
-                _json_response(self, 401, {"ok": False, "error": "Unauthorized"})
-                return
-            cfg = self.server.panel_config
-            _json_response(self, 200, {
-                "ok": True,
-                "url": f"http://{get_server_ip()}:{cfg.port}",
-                "username": cfg.username,
-                "port": cfg.port,
-                "version": __version__,
-            })
-            return
-        _json_response(self, 404, {"ok": False, "error": "Not found"})
+            elif path == "/api/panel/info":
+                cfg = self.server.panel_config
+                _json_response(self, 200, {
+                    "ok": True,
+                    "url": f"http://{get_server_ip()}:{cfg.port}",
+                    "username": cfg.username,
+                    "port": cfg.port,
+                    "version": __version__,
+                })
+            elif path == "/api/logs":
+                query = parse_qs(parsed.query)
+                service = (query.get("service", [""])[0])
+                lines = (query.get("lines", ["100"])[0])
+                ok, output = get_service_logs_any(service, lines)
+                _json_response(self, 200 if ok else 400,
+                               {"ok": ok, "output": output, "services": allowed_log_services()})
+            elif path == "/api/forward/mode":
+                _json_response(self, 200, {"ok": True, "mode": get_forward_mode_info()})
+            elif path == "/api/health":
+                _json_response(self, 200, {"ok": True, "services": health_services()})
+            elif path == "/api/cron/status":
+                _json_response(self, 200, {"ok": True, **cron_status_api()})
+            elif path == "/api/tcp/status":
+                _json_response(self, 200, tcp_status_api())
+            elif path == "/api/dns/status":
+                _json_response(self, 200, {"ok": True, **dns_status_api()})
+            elif path == "/api/dns/scan":
+                _json_response(self, 200, {"ok": True, **dns_scan_state_api()})
+            else:
+                _json_response(self, 404, {"ok": False, "error": "Not found"})
+        except Exception as e:  # noqa: BLE001
+            logger.exception("GET API failed")
+            _json_response(self, 500, {"ok": False, "error": str(e)})
 
     def do_POST(self):  # noqa: N802
         path = urlparse(self.path).path
@@ -799,6 +1134,40 @@ class PanelHandler(BaseHTTPRequestHandler):
             elif path == "/api/forwards/remove":
                 ok, msg = forwards_modify(data.get("name", ""), data.get("ports", ""), False)
                 _json_response(self, 200 if ok else 400, {"ok": ok, "message": msg})
+            elif path == "/api/forward/mode":
+                ok, msg = set_forward_mode_api(data.get("mode", ""))
+                _json_response(self, 200 if ok else 400, {"ok": ok, "message": msg})
+            elif path == "/api/forward/restart":
+                ok, msg = restart_forwards_api()
+                _json_response(self, 200, {"ok": ok, "message": msg})
+            elif path == "/api/forward/validate":
+                ok, msg = validate_forwards_api()
+                _json_response(self, 200 if ok else 400, {"ok": ok, "message": msg})
+            elif path == "/api/service/action":
+                ok, msg = service_action_api(data.get("service", ""), data.get("action", ""))
+                _json_response(self, 200 if ok else 400, {"ok": ok, "message": msg})
+            elif path == "/api/cron/forward":
+                ok, msg = cron_set_api("forward", data.get("action", ""), data.get("interval", 60))
+                _json_response(self, 200 if ok else 400, {"ok": ok, "message": msg})
+            elif path == "/api/cron/easytier":
+                ok, msg = cron_set_api("easytier", data.get("action", ""), data.get("interval", 60))
+                _json_response(self, 200 if ok else 400, {"ok": ok, "message": msg})
+            elif path == "/api/tcp/apply":
+                ok, msg = tcp_apply_api()
+                _json_response(self, 200 if ok else 400, {"ok": ok, "message": msg})
+            elif path == "/api/dns/scan":
+                ok, msg = dns_scan_start_api()
+                _json_response(self, 200 if ok else 400, {"ok": ok, "message": msg})
+            elif path == "/api/dns/interval":
+                ok, msg = dns_interval_api(data.get("hours"))
+                _json_response(self, 200 if ok else 400, {"ok": ok, "message": msg})
+            elif path == "/api/dns/autocheck":
+                ok, msg = dns_autocheck_api(data.get("action", ""))
+                _json_response(self, 200 if ok else 400, {"ok": ok, "message": msg})
+            elif path == "/api/panel/password":
+                _json_response(self, *self._change_password(data))
+            elif path == "/api/panel/port":
+                _json_response(self, *self._change_port(data))
             else:
                 _json_response(self, 404, {"ok": False, "error": "Not found"})
         except Exception as e:  # noqa: BLE001
@@ -829,6 +1198,50 @@ class PanelHandler(BaseHTTPRequestHandler):
             else:
                 rec["count"] += 1
 
+    def _change_password(self, data: dict):
+        """Change panel password. Returns (http_code, obj)."""
+        cfg = self.server.panel_config
+        cfg._load()  # pick up changes made from the TUI
+        current = (data.get("current") or "")
+        new = (data.get("new") or "")
+        if not cfg.verify(self._session_user(), current):
+            return 401, {"ok": False, "error": "Current password is wrong"}
+        if len(new) < 8:
+            return 400, {"ok": False, "error": "New password must be at least 8 characters"}
+        if len(new) > 128:
+            return 400, {"ok": False, "error": "New password is too long (max 128)"}
+        salt = secrets.token_hex(16)
+        cfg._data["salt"] = salt
+        cfg._data["password_hash"] = _hash_password(new, salt)
+        cfg._save()
+        return 200, {"ok": True, "message": "Password changed. Use it on next login."}
+
+    def _change_port(self, data: dict):
+        """Change panel port (restarts service afterwards). Returns (http_code, obj)."""
+        cfg = self.server.panel_config
+        try:
+            port = int(data.get("port", 0))
+        except (TypeError, ValueError):
+            return 400, {"ok": False, "error": "Invalid port"}
+        if not is_valid_port(port):
+            return 400, {"ok": False, "error": "Port must be 1-65535"}
+        if port == cfg.port:
+            return 400, {"ok": False, "error": "Already using this port"}
+        if not is_port_free(port):
+            return 400, {"ok": False, "error": f"Port {port} is already in use"}
+        cfg.set_port(port)
+        ensure_panel_firewall(port)
+        reconnect = f"http://{get_server_ip()}:{port}"
+
+        def _delayed_restart():
+            time.sleep(2)
+            run_command(f"systemctl restart {PANEL_SERVICE}")
+
+        threading.Thread(target=_delayed_restart, daemon=True).start()
+        return 200, {"ok": True,
+                     "message": f"Port changed to {port}. Panel is restarting...",
+                     "reconnect_url": reconnect}
+
     def _handle_login(self) -> None:
         if not self._login_allowed():
             _json_response(self, 429, {"ok": False, "error": "Too many attempts, try later"})
@@ -838,6 +1251,7 @@ class PanelHandler(BaseHTTPRequestHandler):
             _json_response(self, 400, {"ok": False, "error": "Invalid JSON body"})
             return
         cfg = self.server.panel_config
+        cfg._load()  # pick up credential changes made from the TUI
         if cfg.verify(data.get("username", ""), data.get("password", "")):
             token = secrets.token_hex(32)
             with _sessions_lock:

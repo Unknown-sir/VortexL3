@@ -25,7 +25,7 @@ During installation, choose:
 ### Install Specific Version
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/Unknown-sir/VortexL3/main/install.sh) v5.1.0
+bash <(curl -Ls https://raw.githubusercontent.com/Unknown-sir/VortexL3/main/install.sh) v5.2.0
 ```
 
 ## 🚀 Quick Start
@@ -76,6 +76,10 @@ Cyberpunk-themed browser panel to manage tunnels without SSH:
 - View tunnel status, peers and port forwards
 - Start / restart / stop / delete tunnels
 - Create new tunnels (IRAN / KHAREJ) with smart auto defaults
+- View service logs, system health and restart services
+- Switch forward mode (none / haproxy / socat), validate & reload
+- Auto-restart cron, TCP optimization, DNS manager
+- Change panel password and port from the panel itself
 
 Enable it from the TUI menu (`sudo vortexl3` → **Web Panel**). On enable,
 a random access URL, username, password and free port are generated:
