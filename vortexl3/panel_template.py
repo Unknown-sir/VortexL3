@@ -6,6 +6,15 @@ PAGE = r"""<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VORTEXL3 // CYBER TUNNEL CONTROL</title>
+<script>
+/* pre-apply theme + language before first paint (no flash) */
+try{
+  var _th=localStorage.getItem('v3theme')||'cyberpunk';
+  document.documentElement.setAttribute('data-theme',_th);
+  var _lg=localStorage.getItem('v3lang')||'en';
+  if(_lg==='fa'){document.documentElement.setAttribute('dir','rtl');}
+}catch(e){}
+</script>
 <style>
 :root{
   --bg:#050510; --bg2:#0a0a1c;
@@ -134,23 +143,61 @@ table.sv th{color:var(--dim);font-size:11px;letter-spacing:2px}
 .prog div{height:100%;width:0;background:linear-gradient(90deg,var(--neon),var(--pink));
   box-shadow:0 0 12px var(--neon);transition:width .4s}
 select{max-width:100%}
+/* themes */
+[data-theme="matrix"]{--bg:#020805;--bg2:#031007;--neon:#00ff66;--pink:#00ff66;
+  --lime:#ccff00;--txt:#c8ffd8;--dim:#3f7a52;--card:rgba(3,20,10,.85);
+  --line:rgba(0,255,102,.25)}
+[data-theme="solar"]{--bg:#e8edf3;--bg2:#dfe6ee;--neon:#0066cc;--pink:#cc0066;
+  --lime:#1a7a00;--amber:#b36b00;--red:#cc0033;--txt:#1a2433;--dim:#5a6b80;
+  --card:rgba(255,255,255,.92);--line:rgba(0,102,204,.3)}
+[data-theme="solar"] body::after{opacity:.15}
+[dir="rtl"] body,[dir="rtl"] input,[dir="rtl"] select{font-family:Tahoma,"Segoe UI",sans-serif}
+[dir="rtl"] .logo,[dir="rtl"] .tname,[dir="rtl"] .sheet h2,[dir="rtl"] .login h1{letter-spacing:1px}
+/* boot overlay */
+#boot{position:fixed;inset:0;z-index:300;background:var(--bg);display:flex;
+  align-items:center;justify-content:center;cursor:pointer}
+#boot pre{font-family:Consolas,monospace;color:var(--neon);font-size:14px;
+  text-shadow:0 0 10px var(--neon);margin:0;padding:20px;white-space:pre-wrap}
+/* glitch logo */
+.glitch{position:relative}
+.glitch::before,.glitch::after{content:attr(data-t);position:absolute;inset:0;opacity:.7}
+.glitch::before{color:var(--pink);animation:gl1 2.4s infinite steps(2);clip-path:inset(0 0 55% 0)}
+.glitch::after{color:var(--neon);animation:gl2 3.1s infinite steps(2);clip-path:inset(60% 0 0 0)}
+@keyframes gl1{0%,92%{transform:none;opacity:0}93%{transform:translate(-3px,-2px);opacity:.8}
+  96%{transform:translate(3px,1px);opacity:.8}100%{transform:none;opacity:0}}
+@keyframes gl2{0%,88%{transform:none;opacity:0}89%{transform:translate(3px,2px);opacity:.8}
+  94%{transform:translate(-3px,-1px);opacity:.8}100%{transform:none;opacity:0}}
+/* wizard */
+.steps{display:flex;gap:6px;margin:12px 0}
+.step{flex:1;text-align:center;font-size:11px;letter-spacing:2px;color:var(--dim);
+  border-bottom:2px solid rgba(107,122,153,.3);padding-bottom:6px}
+.step.on{color:var(--neon);border-color:var(--neon)}
+.step.done{color:var(--lime);border-color:var(--lime)}
+.review{font-family:Consolas,monospace;font-size:13px;background:#02020a;
+  border:1px solid var(--line);border-radius:10px;padding:12px;white-space:pre-wrap}
+/* charts */
+canvas.chart{width:100%;height:220px;background:#02020a;border:1px solid var(--line);
+  border-radius:10px;margin-top:10px}
+.dtabs{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+canvas.spark{width:100%;height:44px}
 </style>
 </head>
 <body>
 <div class="grid-bg"></div>
+<div id="boot" onclick="skipBoot()"><pre id="boot-txt"></pre></div>
 <div class="wrap">
 
   <!-- LOGIN -->
   <div id="view-login">
     <div class="login">
       <h1>VORTEX<span style="color:var(--pink)">L3</span></h1>
-      <p>CYBER TUNNEL CONTROL // SECURE ACCESS</p>
-      <label>USERNAME</label>
+      <p data-i18n="login_sub">CYBER TUNNEL CONTROL // SECURE ACCESS</p>
+      <label data-i18n="username">USERNAME</label>
       <input id="in-user" autocomplete="username" placeholder="vortex-xxxxxx">
-      <label>PASSWORD</label>
+      <label data-i18n="password">PASSWORD</label>
       <input id="in-pass" type="password" autocomplete="current-password" placeholder="••••••••••••">
       <div id="login-err" class="err"></div>
-      <button class="btn pink w100" id="btn-login" onclick="doLogin()">JACK IN ▸</button>
+      <button class="btn pink w100" id="btn-login" onclick="doLogin()" data-i18n="login_btn">JACK IN ▸</button>
     </div>
   </div>
 
@@ -158,43 +205,79 @@ select{max-width:100%}
   <div id="view-dash" class="hidden">
     <div class="hdr">
       <div>
-        <div class="logo">VORTEX<span>L3</span></div>
-        <div class="sub">CYBER TUNNEL CONTROL</div>
+        <div class="logo glitch" data-t="VORTEXL3">VORTEX<span>L3</span></div>
+        <div class="sub" data-i18n="subtitle">CYBER TUNNEL CONTROL</div>
         <div class="meta">MODE <b id="m-mode">-</b> &nbsp;•&nbsp; NODE <b id="m-ip">-</b> &nbsp;•&nbsp; v<b id="m-ver">-</b></div>
       </div>
       <div style="text-align:right">
         <span class="badge" id="m-count">0 TUNNELS</span>
         <div class="topbar" style="justify-content:flex-end;margin-top:10px">
-          <button class="btn pink" onclick="openCreate()">+ NEW TUNNEL</button>
-          <button class="btn ghost" onclick="doLogout()">LOGOUT</button>
+          <button class="btn pink" onclick="openCreate()" data-i18n="new_tunnel">+ NEW TUNNEL</button>
+          <button class="btn ghost" onclick="cycleTheme()" id="btn-theme" title="Theme">◐</button>
+          <button class="btn ghost" onclick="cycleLang()" id="btn-lang" title="Language">FA</button>
+          <button class="btn ghost" onclick="doLogout()" data-i18n="logout">LOGOUT</button>
         </div>
       </div>
     </div>
 
     <div class="topbar" id="tabs">
-      <button class="btn tab active" onclick="showTab('tunnels',this)">TUNNELS</button>
-      <button class="btn tab" onclick="showTab('system',this)">SYSTEM</button>
-      <button class="btn tab" onclick="showTab('network',this)">NETWORK</button>
-      <button class="btn tab" onclick="showTab('panel',this)">PANEL</button>
+      <button class="btn tab active" onclick="showTab('tunnels',this)" data-i18n="tab_tunnels">TUNNELS</button>
+      <button class="btn tab" onclick="showTab('system',this)" data-i18n="tab_system">SYSTEM</button>
+      <button class="btn tab" onclick="showTab('network',this)" data-i18n="tab_network">NETWORK</button>
+      <button class="btn tab" onclick="showTab('panel',this)" data-i18n="tab_panel">PANEL</button>
     </div>
 
     <div id="sec-tunnels">
     <div class="cards">
-      <div class="stat"><div class="k">TOTAL</div><div class="v" id="s-total">0</div></div>
-      <div class="stat"><div class="k">ONLINE</div><div class="v" id="s-on" style="color:var(--lime)">0</div></div>
-      <div class="stat"><div class="k">OFFLINE</div><div class="v pink" id="s-off">0</div></div>
-      <div class="stat"><div class="k">FORWARDS</div><div class="v" id="s-fw">0</div></div>
+      <div class="stat"><div class="k" data-i18n="total">TOTAL</div><div class="v" id="s-total">0</div></div>
+      <div class="stat"><div class="k" data-i18n="online">ONLINE</div><div class="v" id="s-on" style="color:var(--lime)">0</div></div>
+      <div class="stat"><div class="k" data-i18n="offline">OFFLINE</div><div class="v pink" id="s-off">0</div></div>
+      <div class="stat"><div class="k" data-i18n="fwds">FORWARDS</div><div class="v" id="s-fw">0</div></div>
     </div>
 
     <div id="tunnels"></div>
     <div id="log"></div>
     </div><!-- /sec-tunnels -->
 
+    <div id="sec-detail" class="hidden">
+      <div class="rowbtns"><button class="btn ghost" onclick="backToList()">◂ <span data-i18n="back">BACK</span></button></div>
+      <div class="tun"><div class="tun-head"><span class="dot" id="d-dot"></span>
+        <span class="tname" id="d-name">-</span><span class="ttype" id="d-type">-</span>
+        <span class="tstatus" id="d-status">-</span></div>
+        <div class="tun-body">
+          <div class="dtabs">
+            <button class="btn tab active" onclick="dtab('info',this)" data-i18n="overview">OVERVIEW</button>
+            <button class="btn tab" onclick="dtab('traffic',this)" data-i18n="traffic">TRAFFIC</button>
+            <button class="btn tab" onclick="dtab('forwards',this)" data-i18n="forwards">FORWARDS</button>
+            <button class="btn tab" onclick="dtab('logs',this)" data-i18n="logs">LOGS</button>
+            <button class="btn tab" onclick="dtab('peer',this)" data-i18n="peer">PEER</button>
+          </div>
+          <div id="d-info"><div class="kv" id="d-kv"></div><div class="fwds" id="d-peers"></div>
+            <div class="rowbtns" id="d-actions"></div></div>
+          <div id="d-traffic" class="hidden">
+            <div class="rowbtns">
+              <button class="btn ghost" onclick="loadHistory(1)">1H</button>
+              <button class="btn ghost" onclick="loadHistory(6)">6H</button>
+              <button class="btn ghost" onclick="loadHistory(24)">24H</button>
+            </div>
+            <canvas class="chart" id="ch-tp" width="900" height="220"></canvas>
+            <canvas class="chart" id="ch-ping" width="900" height="140"></canvas>
+          </div>
+          <div id="d-forwards" class="hidden"><div class="fwds" id="d-fw"></div>
+            <div class="rowbtns"><button class="btn pink" id="d-fwbtn">MANAGE</button></div></div>
+          <div id="d-logs" class="hidden"><div class="rowbtns">
+            <button class="btn" onclick="loadDetailLogs()">LOAD ▸</button></div>
+            <div id="d-logview" class="logview">Hit LOAD.</div></div>
+          <div id="d-peer" class="hidden"><div id="d-peerbody" class="logview" style="color:var(--txt)">loading…</div>
+            <div class="rowbtns"><button class="btn" onclick="copyPeer2()">COPY ▸</button></div></div>
+        </div></div>
+    </div>
+
     <div id="sec-system" class="hidden">
-      <div class="tun"><div class="tun-head"><span class="tname">SERVICES</span>
+      <div class="tun"><div class="tun-head"><span class="tname" data-i18n="services">SERVICES</span>
         <span class="tstatus"><button class="btn ghost" onclick="loadHealth()">REFRESH</button></span></div>
         <div class="tun-body" id="health"></div></div>
-      <div class="tun"><div class="tun-head"><span class="tname">LOGS</span></div>
+      <div class="tun"><div class="tun-head"><span class="tname" data-i18n="logs_t">LOGS</span></div>
         <div class="tun-body">
           <div class="rowbtns">
             <select id="log-svc" style="max-width:300px"></select>
@@ -206,7 +289,7 @@ select{max-width:100%}
           </div>
           <div id="logview" class="logview">Select a service and hit LOAD.</div>
         </div></div>
-      <div class="tun"><div class="tun-head"><span class="tname">TELEGRAM ALERTS</span></div>
+      <div class="tun"><div class="tun-head"><span class="tname" data-i18n="tg">TELEGRAM ALERTS</span></div>
         <div class="tun-body">
           <div class="kv" id="tgbox"></div>
           <label>BOT TOKEN</label><input id="tg-token" type="password" placeholder="123456:ABC-...">
@@ -219,7 +302,7 @@ select{max-width:100%}
           </div>
           <div class="hint">Create a bot via @BotFather, then send it one message and get your chat ID via @userinfobot. Alerts fire when a tunnel goes down / recovers.</div>
         </div></div>
-      <div class="tun"><div class="tun-head"><span class="tname">BACKUP &amp; RESTORE</span></div>
+      <div class="tun"><div class="tun-head"><span class="tname" data-i18n="backup">BACKUP &amp; RESTORE</span></div>
         <div class="tun-body">
           <div class="rowbtns">
             <button class="btn" onclick="doBackup()">DOWNLOAD BACKUP ▸</button>
@@ -228,7 +311,7 @@ select{max-width:100%}
           <input id="restore-file" type="file" accept=".json,application/json">
           <div class="rowbtns"><button class="btn pink" onclick="doRestore()">RESTORE ▸</button></div>
         </div></div>
-      <div class="tun"><div class="tun-head"><span class="tname">UPDATE FROM GITHUB</span></div>
+      <div class="tun"><div class="tun-head"><span class="tname" data-i18n="update">UPDATE FROM GITHUB</span></div>
         <div class="tun-body">
           <div class="kv" id="updbox"></div>
           <div class="rowbtns">
@@ -241,7 +324,7 @@ select{max-width:100%}
     </div>
 
     <div id="sec-network" class="hidden">
-      <div class="tun"><div class="tun-head"><span class="tname">FORWARD ENGINE</span></div>
+      <div class="tun"><div class="tun-head"><span class="tname" data-i18n="fwd_engine">FORWARD ENGINE</span></div>
         <div class="tun-body">
           <div class="kv"><div>MODE <b id="fw-mode">-</b></div></div>
           <div class="rowbtns">
@@ -252,15 +335,15 @@ select{max-width:100%}
             <button class="btn ghost" onclick="fwValidate()">VALIDATE</button>
           </div>
         </div></div>
-      <div class="tun"><div class="tun-head"><span class="tname">AUTO-RESTART CRON</span></div>
+      <div class="tun"><div class="tun-head"><span class="tname" data-i18n="cron">AUTO-RESTART CRON</span></div>
         <div class="tun-body" id="cronbox"></div></div>
-      <div class="tun"><div class="tun-head"><span class="tname">TCP OPTIMIZATION</span></div>
+      <div class="tun"><div class="tun-head"><span class="tname" data-i18n="tcp">TCP OPTIMIZATION</span></div>
         <div class="tun-body">
           <div class="kv" id="tcpbox"></div>
           <div class="rowbtns"><button class="btn pink" onclick="applyTcp()">APPLY OPTIMIZATION ▸</button>
           <button class="btn ghost" onclick="loadTcp()">REFRESH</button></div>
         </div></div>
-      <div class="tun"><div class="tun-head"><span class="tname">DNS MANAGER</span></div>
+      <div class="tun"><div class="tun-head"><span class="tname" data-i18n="dns">DNS MANAGER</span></div>
         <div class="tun-body">
           <div class="kv" id="dnsbox"></div>
           <div class="rowbtns">
@@ -276,14 +359,31 @@ select{max-width:100%}
             <button class="btn danger" onclick="dnsAuto('disable')">AUTO-CHECK OFF</button>
           </div>
         </div></div>
+      <div class="tun"><div class="tun-head"><span class="tname" data-i18n="speed">SPEED TEST</span><span style="font-size:11px;color:var(--dim)">iperf3</span></div>
+        <div class="tun-body">
+          <div class="kv" id="speedbox"></div>
+          <div class="rowbtns" id="speedbtns">
+            <button class="btn ghost" onclick="speedInstall()">INSTALL IPERF3 ▸</button>
+            <button class="btn ghost" onclick="speedServer('start')">SERVER ON</button>
+            <button class="btn danger" onclick="speedServer('stop')">SERVER OFF</button>
+          </div>
+          <div class="grid2" style="margin-top:10px">
+            <div><label data-i18n="target">TARGET (peer tunnel IP)</label><select id="sp-target"></select></div>
+            <div><label data-i18n="duration">DURATION</label><select id="sp-dur">
+              <option value="5">5s</option><option value="10" selected>10s</option><option value="30">30s</option>
+            </select></div>
+          </div>
+          <div class="rowbtns"><button class="btn pink" onclick="speedRun()">RUN TEST ▸</button></div>
+          <div id="speedres" class="fwds" style="margin-top:8px"></div>
+        </div></div>
     </div>
 
     <div id="sec-panel" class="hidden">
-      <div class="tun"><div class="tun-head"><span class="tname">ACCESS</span></div>
+      <div class="tun"><div class="tun-head"><span class="tname" data-i18n="access">ACCESS</span></div>
         <div class="tun-body"><div class="kv" id="panelbox"></div>
           <div class="rowbtns"><button class="btn ghost" onclick="loadPanelInfo()">REFRESH</button></div>
         </div></div>
-      <div class="tun"><div class="tun-head"><span class="tname">HTTPS</span></div>
+      <div class="tun"><div class="tun-head"><span class="tname" data-i18n="https">HTTPS</span></div>
         <div class="tun-body">
           <div class="kv" id="httpsbox"></div>
           <div class="hint">Self-signed certificate (browser will show a warning — accept it). Changing restarts the panel.</div>
@@ -293,13 +393,13 @@ select{max-width:100%}
           </div>
           <div id="https-reconnect" class="hidden" style="margin-top:10px"></div>
         </div></div>
-      <div class="tun"><div class="tun-head"><span class="tname">CHANGE PASSWORD</span></div>
+      <div class="tun"><div class="tun-head"><span class="tname" data-i18n="chg_pass">CHANGE PASSWORD</span></div>
         <div class="tun-body">
           <label>CURRENT PASSWORD</label><input id="pw-cur" type="password">
           <label>NEW PASSWORD (min 8 chars)</label><input id="pw-new" type="password">
           <div class="rowbtns"><button class="btn pink" onclick="changePw()">CHANGE ▸</button></div>
         </div></div>
-      <div class="tun"><div class="tun-head"><span class="tname">CHANGE PORT</span></div>
+      <div class="tun"><div class="tun-head"><span class="tname" data-i18n="chg_port">CHANGE PORT</span></div>
         <div class="tun-body">
           <label>NEW PORT (1-65535, must be free)</label><input id="p-port" placeholder="e.g. 32410">
           <div class="hint">Panel restarts after the change — reconnect via the new URL.</div>
@@ -313,55 +413,15 @@ select{max-width:100%}
 <!-- CREATE MODAL -->
 <div class="modal" id="modal">
   <div class="sheet">
-    <h2 id="mc-title">NEW TUNNEL</h2>
+    <h2 data-i18n="new_tunnel">NEW TUNNEL</h2>
     <div class="hint" id="mc-mode"></div>
-    <div class="grid2">
-      <div><label>SIDE</label>
-        <select id="f-side"><option value="IRAN">IRAN</option><option value="KHAREJ">KHAREJ</option></select></div>
-      <div><label>NAME</label><input id="f-name" placeholder="tunnel1"></div>
-    </div>
-    <div id="fld-l2tp">
-      <div class="grid2">
-        <div><label>LOCAL SERVER PUBLIC IP *</label><input id="f-local" placeholder="1.2.3.4"></div>
-        <div><label>REMOTE SERVER PUBLIC IP *</label><input id="f-remote" placeholder="5.6.7.8"></div>
-      </div>
-      <div class="grid2">
-        <div><label>INTERFACE IP</label><input id="f-ifip" placeholder="auto"></div>
-        <div><label>REMOTE FORWARD IP (IRAN)</label><input id="f-rfwd" placeholder="auto"></div>
-      </div>
-      <div class="grid2">
-        <div><label>ENCAP</label><select id="f-encap"><option value="ip">IP</option><option value="udp">UDP</option></select></div>
-        <div><label>UDP PORT</label><input id="f-udp" placeholder="auto"></div>
-      </div>
-      <div class="grid2">
-        <div><label>TUNNEL ID</label><input id="f-tid" placeholder="auto"></div>
-        <div><label>PEER TUNNEL ID</label><input id="f-ptid" placeholder="auto"></div>
-      </div>
-      <div class="grid2">
-        <div><label>SESSION ID</label><input id="f-sid" placeholder="auto"></div>
-        <div><label>PEER SESSION ID</label><input id="f-psid" placeholder="auto"></div>
-      </div>
-      <div class="hint">Empty = smart auto value (collision-free). IDs must mirror the other side.</div>
-    </div>
-    <div id="fld-et" class="hidden">
-      <div class="grid2">
-        <div><label>TUNNEL INTERFACE IP</label><input id="f-etip" placeholder="auto"></div>
-        <div><label>PEER SERVER PUBLIC IP *</label><input id="f-etpeer" placeholder="9.9.9.9"></div>
-      </div>
-      <div class="grid2">
-        <div><label>MESH PORT</label><input id="f-etport" placeholder="auto"></div>
-        <div><label>HOSTNAME</label><input id="f-ethost" placeholder="auto"></div>
-      </div>
-      <div class="grid2">
-        <div><label>NETWORK SECRET</label><input id="f-etsec" placeholder="vortexl2"></div>
-        <div><label>REMOTE FORWARD IP (IRAN)</label><input id="f-etrf" placeholder="auto"></div>
-      </div>
-      <div class="hint">Network name is auto-derived from the secret so both sides match.</div>
-    </div>
+    <div class="steps" id="wz-steps"></div>
+    <div id="wz-body"></div>
     <div class="err" id="mc-err"></div>
     <div class="rowbtns">
-      <button class="btn pink" id="btn-create" onclick="doCreate()">DEPLOY ▸</button>
-      <button class="btn ghost" onclick="closeCreate()">CANCEL</button>
+      <button class="btn ghost" id="wz-back" onclick="wzNav(-1)">◂ <span data-i18n="back">BACK</span></button>
+      <button class="btn pink" id="wz-next" onclick="wzNav(1)">NEXT ▸</button>
+      <button class="btn ghost" onclick="closeCreate()" data-i18n="cancel">CANCEL</button>
     </div>
   </div>
 </div>
@@ -369,7 +429,7 @@ select{max-width:100%}
 <!-- FORWARDS MODAL -->
 <div class="modal" id="modal-fw">
   <div class="sheet">
-    <h2>PORT FORWARDS</h2>
+    <h2 data-i18n="pf">PORT FORWARDS</h2>
     <div class="hint" id="fw-tun"></div>
     <label>PORTS (e.g. 443,80,2000-2005)</label>
     <input id="fw-ports" placeholder="443,80">
@@ -385,7 +445,7 @@ select{max-width:100%}
 <!-- PEER CARD MODAL -->
 <div class="modal" id="modal-peer">
   <div class="sheet">
-    <h2>PEER SETUP CARD</h2>
+    <h2 data-i18n="peer">PEER SETUP CARD</h2>
     <div class="hint" id="peer-sub">Enter these values on the OTHER server.</div>
     <div id="peercard" class="logview" style="color:var(--txt)">loading…</div>
     <div class="rowbtns">
@@ -437,7 +497,7 @@ async function refresh(){
     document.getElementById('m-mode').textContent=r.mode.toUpperCase();
     document.getElementById('m-ip').textContent=r.server_ip;
     document.getElementById('m-ver').textContent=r.version;
-    const t=r.tunnels;let on=0,fw=0;
+    const t=r.tunnels;LAST=t;let on=0,fw=0;
     t.forEach(x=>{if(x.running)on++;fw+=(x.forwards||[]).length;});
     document.getElementById('s-total').textContent=t.length;
     document.getElementById('s-on').textContent=on;
@@ -445,7 +505,7 @@ async function refresh(){
     document.getElementById('s-fw').textContent=fw;
     document.getElementById('m-count').textContent=t.length+' TUNNELS';
     const box=document.getElementById('tunnels');box.innerHTML='';
-    if(!t.length){box.innerHTML='<div class="tun"><div class="tun-body">No tunnels yet — hit <b>+ NEW TUNNEL</b>.</div></div>';return;}
+    if(!t.length){box.innerHTML=`<div class="tun"><div class="tun-body">${t('no_tun')}</div></div>`;return;}
     t.forEach(x=>{
       const d=document.createElement('div');d.className='tun';
       const kv = x.type==='easytier'
@@ -464,7 +524,7 @@ async function refresh(){
       d.innerHTML=`
         <div class="tun-head">
           <span class="dot ${x.running?'on':'off'}"></span>
-          <span class="tname">${esc(x.name)}</span>
+          <span class="tname" style="cursor:pointer" onclick="openDetail('${esc(x.name)}')">${esc(x.name)}</span>
           <span class="ttype">${esc(x.type.toUpperCase())}</span>
           <span class="tstatus ${x.running?'on':'off'}">${esc(x.status).toUpperCase()}</span>
         </div>
@@ -474,13 +534,14 @@ async function refresh(){
           <div class="fwds">FORWARDS<br>${fw}</div>
           <div class="fwds" id="traf-${esc(x.name)}">TRAFFIC<br><span class="hint">loading…</span></div>
           <div class="rowbtns">
-            <button class="btn" onclick="act('${esc(x.name)}','start')">START</button>
-            <button class="btn" onclick="act('${esc(x.name)}','restart')">RESTART</button>
-            <button class="btn" onclick="act('${esc(x.name)}','stop')">STOP</button>
-            <button class="btn pink" onclick="openFw('${esc(x.name)}')">FORWARDS</button>
-            <button class="btn ghost" onclick="pingTest('${esc(x.name)}')">PING TEST</button>
-            <button class="btn ghost" onclick="openPeer('${esc(x.name)}')">PEER CARD</button>
-            <button class="btn danger" onclick="del('${esc(x.name)}')">DELETE</button>
+            <button class="btn" onclick="openDetail('${esc(x.name)}')">${t('overview')}</button>
+            <button class="btn" onclick="act('${esc(x.name)}','start')">${t('start')}</button>
+            <button class="btn" onclick="act('${esc(x.name)}','restart')">${t('restart')}</button>
+            <button class="btn" onclick="act('${esc(x.name)}','stop')">${t('stop')}</button>
+            <button class="btn pink" onclick="openFw('${esc(x.name)}')">${t('forwards')}</button>
+            <button class="btn ghost" onclick="pingTest('${esc(x.name)}')">${t('ping_test')}</button>
+            <button class="btn ghost" onclick="openPeer('${esc(x.name)}')">${t('peer_card')}</button>
+            <button class="btn danger" onclick="del('${esc(x.name)}')">${t('delete')}</button>
           </div>
         </div>`;
       box.appendChild(d);
@@ -491,46 +552,174 @@ async function act(name,action){
   toast(action.toUpperCase()+' '+name+' …');
   try{const r=await api('/api/tunnel/action',{name,action});
     log('['+action.toUpperCase()+'] '+name+'\n'+(r.message||r.error||''));
-    toast(r.ok?'Done ✓':'Failed ✗',r.ok);refresh();
+    toast(r.ok?'Done ✓':'Failed ✗',r.ok);await refresh();
+    if(DETAIL){const x=LAST.find(v=>v.name===DETAIL);if(x)renderDetail(x);}
   }catch(err){toast(err.message,false);}
 }
 async function del(name){
   if(!confirm('Delete tunnel "'+name+'"?'))return;
   act(name,'delete');
 }
-function openCreate(){
-  document.getElementById('mc-err').style.display='none';
-  document.getElementById('mc-mode').textContent='MODE: '+MODE.toUpperCase();
-  document.getElementById('fld-l2tp').classList.toggle('hidden',MODE==='easytier');
-  document.getElementById('fld-et').classList.toggle('hidden',MODE!=='easytier');
-  document.getElementById('modal').classList.add('open');
+/* ---- i18n + theme + boot ---- */
+const I18N={
+en:{subtitle:'CYBER TUNNEL CONTROL',login_sub:'CYBER TUNNEL CONTROL // SECURE ACCESS',
+ username:'USERNAME',password:'PASSWORD',login_btn:'JACK IN ▸',
+ tab_tunnels:'TUNNELS',tab_system:'SYSTEM',tab_network:'NETWORK',tab_panel:'PANEL',
+ new_tunnel:'+ NEW TUNNEL',logout:'LOGOUT',back:'BACK',cancel:'CANCEL',next:'NEXT ▸',deploy:'DEPLOY ▸',
+ overview:'OVERVIEW',traffic:'TRAFFIC',forwards:'FORWARDS',logs:'LOGS',peer:'PEER',
+ total:'TOTAL',online:'ONLINE',offline:'OFFLINE',fwds:'FORWARDS',
+ start:'START',restart:'RESTART',stop:'STOP',delete:'DELETE',ping_test:'PING TEST',peer_card:'PEER CARD',
+ manage:'MANAGE',refresh:'REFRESH',load:'LOAD ▸',enable:'ENABLE',disable:'DISABLE',validate:'VALIDATE',
+ services:'SERVICES',logs_t:'LOGS',fwd_engine:'FORWARD ENGINE',cron:'AUTO-RESTART CRON',tcp:'TCP OPTIMIZATION',
+ dns:'DNS MANAGER',speed:'SPEED TEST',access:'ACCESS',chg_pass:'CHANGE PASSWORD',chg_port:'CHANGE PORT',
+ https:'HTTPS',tg:'TELEGRAM ALERTS',backup:'BACKUP & RESTORE',update:'UPDATE FROM GITHUB',pf:'PORT FORWARDS',
+ new_t:'NEW TUNNEL',no_tun:'No tunnels yet — hit + NEW TUNNEL.'},
+fa:{subtitle:'کنترل سایبری تانل',login_sub:'کنترل سایبری تانل // دسترسی امن',
+ username:'نام کاربری',password:'گذرواژه',login_btn:'ورود ▸',
+ tab_tunnels:'تانل‌ها',tab_system:'سیستم',tab_network:'شبکه',tab_panel:'پنل',
+ new_tunnel:'+ تانل جدید',logout:'خروج',back:'بازگشت',cancel:'انصراف',next:'بعدی ▸',deploy:'استقرار ▸',
+ overview:'نمای کلی',traffic:'ترافیک',forwards:'فورواردها',logs:'لاگ‌ها',peer:'همتا',
+ total:'کل',online:'آنلاین',offline:'آفلاین',fwds:'فورواردها',
+ start:'استارت',restart:'ری‌استارت',stop:'توقف',delete:'حذف',ping_test:'تست پینگ',peer_card:'کارت همتا',
+ manage:'مدیریت',refresh:'به‌روزرسانی',load:'بارگذاری ▸',enable:'فعال',disable:'غیرفعال',validate:'اعتبارسنجی',
+ services:'سرویس‌ها',logs_t:'لاگ‌ها',fwd_engine:'موتور فوروارد',cron:'ری‌استارت خودکار',tcp:'بهینه‌سازی TCP',
+ dns:'مدیریت DNS',speed:'تست سرعت',access:'دسترسی',chg_pass:'تغییر گذرواژه',chg_port:'تغییر پورت',
+ https:'HTTPS',tg:'هشدار تلگرام',backup:'بکاپ و بازیابی',update:'آپدیت از گیت‌هاب',pf:'فوروارد پورت',
+ new_t:'تانل جدید',no_tun:'هنوز تانلی نیست — «+ تانل جدید» را بزن.'}};
+let LANG=localStorage.getItem('v3lang')||'en';
+function t(k){return (I18N[LANG]&&I18N[LANG][k])||I18N.en[k]||k;}
+function applyLang(){
+  document.querySelectorAll('[data-i18n]').forEach(el=>{el.textContent=t(el.getAttribute('data-i18n'));});
+  document.querySelectorAll('[data-i18n-ph]').forEach(el=>{el.setAttribute('placeholder',t(el.getAttribute('data-i18n-ph')));});
+  document.getElementById('btn-lang').textContent=LANG==='en'?'FA':'EN';
+  if(typeof refresh==='function'&&!document.getElementById('view-dash').classList.contains('hidden'))refresh();
 }
-function closeCreate(){document.getElementById('modal').classList.remove('open');}
-function openFw(name){FW_TUNNEL=name;
-  document.getElementById('fw-tun').textContent='TUNNEL: '+name;
-  document.getElementById('fw-err').style.display='none';
-  document.getElementById('modal-fw').classList.add('open');}
-function closeFw(){document.getElementById('modal-fw').classList.remove('open');}
-function val(id){return document.getElementById(id).value.trim();}
-async function doCreate(){
-  const e=document.getElementById('mc-err');e.style.display='none';
-  const b=document.getElementById('btn-create');b.disabled=true;
-  let body;
-  if(MODE==='easytier'){
-    body={side:val('f-side'),name:val('f-name'),local_ip:val('f-etip'),peer_ip:val('f-etpeer'),
-      port:val('f-etport'),hostname:val('f-ethost'),network_secret:val('f-etsec'),
-      remote_forward_ip:val('f-etrf')};
-  }else{
-    body={side:val('f-side'),name:val('f-name'),local_ip:val('f-local'),remote_ip:val('f-remote'),
-      interface_ip:val('f-ifip'),remote_forward_ip:val('f-rfwd'),encap:val('f-encap'),
-      udp_port:val('f-udp'),tunnel_id:val('f-tid'),peer_tunnel_id:val('f-ptid'),
-      session_id:val('f-sid'),peer_session_id:val('f-psid')};
-  }
-  try{const r=await api('/api/tunnel/create',body);
-    if(r.ok){closeCreate();log('[CREATE]\n'+r.message);toast('Tunnel deployed ✓');refresh();}
-    else{e.textContent=r.message||r.error;e.style.display='block';}
-  }catch(err){e.textContent=err.message;e.style.display='block';}
-  b.disabled=false;
+function cycleLang(){LANG=LANG==='en'?'fa':'en';
+  try{localStorage.setItem('v3lang',LANG);}catch(e){}
+  document.documentElement.setAttribute('dir',LANG==='fa'?'rtl':'');
+  applyLang();}
+const THEMES=['cyberpunk','matrix','solar'];
+function cycleTheme(){
+  const cur=document.documentElement.getAttribute('data-theme')||'cyberpunk';
+  const nxt=THEMES[(THEMES.indexOf(cur)+1)%THEMES.length];
+  document.documentElement.setAttribute('data-theme',nxt);
+  try{localStorage.setItem('v3theme',nxt);}catch(e){}
+  toast('Theme: '+nxt);
+}
+const BOOT_LINES=['VORTEXL3 SECURE SHELL v'+'5.4.0','> establishing uplink ............ OK',
+ '> verifying tunnel grid .......... OK','> access granted — welcome, operator'];
+let BOOT_TIMER=null;
+function runBoot(){
+  const box=document.getElementById('boot'),pre=document.getElementById('boot-txt');
+  if(!box||!pre)return;
+  box.style.display='flex';pre.textContent='';let i=0;
+  clearInterval(BOOT_TIMER);
+  BOOT_TIMER=setInterval(()=>{
+    if(i<BOOT_LINES.length){pre.textContent+=BOOT_LINES[i]+'\n';i++;}
+    else{skipBoot();}
+  },380);
+}
+function skipBoot(){clearInterval(BOOT_TIMER);
+  const box=document.getElementById('boot');if(box)box.style.display='none';}
+runBoot();
+/* ---- tunnel detail page ---- */
+let DETAIL=null,LAST=[];
+function openDetail(name){
+  const x=LAST.find(v=>v.name===name);if(!x){toast('Tunnel not loaded',false);return;}
+  DETAIL=name;renderDetail(x);
+  ['tunnels','system','network','panel'].forEach(v=>document.getElementById('sec-'+v).classList.add('hidden'));
+  document.querySelectorAll('#tabs .tab').forEach(b=>b.classList.remove('active'));
+  document.getElementById('sec-detail').classList.remove('hidden');
+  dtab('info');window.scrollTo(0,0);
+}
+function backToList(){
+  DETAIL=null;document.getElementById('sec-detail').classList.add('hidden');refresh();
+}
+function renderDetail(x){
+  document.getElementById('d-dot').className='dot '+(x.running?'on':'off');
+  document.getElementById('d-name').textContent=x.name;
+  document.getElementById('d-type').textContent=(x.type||'').toUpperCase();
+  const st=document.getElementById('d-status');
+  st.textContent=(x.status||'').toUpperCase();st.className='tstatus '+(x.running?'on':'off');
+  const rows=x.type==='easytier'
+    ?[['INTERFACE',x.interface],['LOCAL IP',x.local_ip],['PEER IP',x.remote_ip],['MESH PORT',x.port]]
+    :[['INTERFACE',x.interface],['LOCAL IP',x.local_ip],['REMOTE IP',x.remote_ip],
+      ['TUNNEL IP',x.interface_ip],['TUNNEL ID',x.tunnel_id],['ENCAP',x.encap]];
+  document.getElementById('d-kv').innerHTML=rows.map(r=>`<div>${r[0]} <b>${esc(r[1]||'-')}</b></div>`).join('');
+  document.getElementById('d-peers').innerHTML=(x.peers||[]).length?
+    'PEERS<br>'+x.peers.map(p=>`<span class="tag">${esc(p.ipv4)} · ${esc(p.hostname)} · ${esc(p.latency)} · ${esc(p.tunnel)}</span>`).join(''):'';
+  document.getElementById('d-fw').innerHTML=(x.forwards||[]).length?
+    x.forwards.map(f=>`<span class="tag">${esc(f.port)} → ${esc(f.remote)} ${f.active?'●':'○'}</span>`).join('')
+    :'<span class="hint">none</span>';
+  document.getElementById('d-fwbtn').onclick=()=>openFw(x.name);
+  document.getElementById('d-actions').innerHTML=
+    `<button class="btn" onclick="act('${esc(x.name)}','start')">${t('start')}</button>
+     <button class="btn" onclick="act('${esc(x.name)}','restart')">${t('restart')}</button>
+     <button class="btn" onclick="act('${esc(x.name)}','stop')">${t('stop')}</button>
+     <button class="btn ghost" onclick="pingTest('${esc(x.name)}')">${t('ping_test')}</button>
+     <button class="btn danger" onclick="del('${esc(x.name)}')">${t('delete')}</button>`;
+  loadHistory(6);loadDetailPeer();
+}
+function dtab(sub,btn){
+  ['info','traffic','forwards','logs','peer'].forEach(s=>
+    document.getElementById('d-'+s).classList.toggle('hidden',s!==sub));
+  if(btn){btn.parentElement.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');}
+  if(sub==='traffic')loadHistory(6);
+  if(sub==='peer')loadDetailPeer();
+}
+async function loadDetailPeer(){
+  const box=document.getElementById('d-peerbody');if(!DETAIL)return;
+  try{const r=await api('/api/peer/card?name='+encodeURIComponent(DETAIL));
+    box.textContent=r.ok?Object.entries(r.card).map(([k,v])=>k+': '+v).join('\n')
+      :'Error: '+(r.error||'failed');
+  }catch(err){box.textContent='Error: '+err.message;}
+}
+function copyPeer2(){navigator.clipboard.writeText(document.getElementById('d-peerbody').textContent)
+  .then(()=>toast('Copied ✓')).catch(()=>toast('Copy failed',false));}
+async function loadDetailLogs(){
+  const box=document.getElementById('d-logview');box.textContent='Loading…';
+  const x=LAST.find(v=>v.name===DETAIL);if(!x)return;
+  const svc=x.type==='easytier'?('vortexl3-easytier-'+x.name):'vortexl3-tunnel';
+  try{const r=await api('/api/logs?service='+encodeURIComponent(svc)+'&lines=100');
+    box.textContent=r.ok?r.output:('Error: '+(r.error||'failed'));
+  }catch(err){box.textContent='Error: '+err.message;}
+}
+/* ---- charts (offline canvas) ---- */
+function cssVar(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()||'#00f0ff';}
+function drawSeries(cv,series,keys,colors){
+  const ctx=cv.getContext('2d'),W=cv.width,H=cv.height;
+  ctx.clearRect(0,0,W,H);ctx.fillStyle='#02020a';ctx.fillRect(0,0,W,H);
+  const pad=8,V=series.map(p=>keys.map(k=>p[k]||0)).flat();
+  let mx=Math.max(1,...V);
+  ctx.strokeStyle='rgba(120,140,180,.15)';ctx.lineWidth=1;
+  for(let g=0;g<=4;g++){const y=pad+(H-2*pad)*g/4;
+    ctx.beginPath();ctx.moveTo(pad,y);ctx.lineTo(W-pad,y);ctx.stroke();}
+  keys.forEach((k,ki)=>{
+    ctx.strokeStyle=colors[ki];ctx.lineWidth=2;ctx.shadowColor=colors[ki];ctx.shadowBlur=8;
+    ctx.beginPath();let started=false;
+    series.forEach((p,i)=>{
+      const x=series.length<2?W/2:pad+(W-2*pad)*i/(series.length-1);
+      const y=H-pad-(H-2*pad)*Math.min((p[k]||0)/mx,1);
+      if(!started){ctx.moveTo(x,y);started=true;}else ctx.lineTo(x,y);});
+    ctx.stroke();ctx.shadowBlur=0;});
+  const last=series[series.length-1];
+  ctx.font='12px Consolas,monospace';
+  keys.forEach((k,ki)=>{ctx.fillStyle=colors[ki];
+    ctx.fillText(k+': '+(last?last[k]:0),pad+ki*170,H-4);});
+  ctx.fillStyle='rgba(120,140,180,.8)';
+  ctx.fillText('max '+mx,pad,14);
+}
+async function loadHistory(hours){
+  if(!DETAIL)return;
+  try{const r=await api('/api/history?name='+encodeURIComponent(DETAIL)+'&hours='+hours);
+    if(!r.ok||!r.series)return;
+    const pts=r.series.points;
+    if(!pts.length){toast('No history yet — sampler collects every 30s',false);return;}
+    drawSeries(document.getElementById('ch-tp'),pts,['rx_mbps','tx_mbps'],
+      [cssVar('--neon'),cssVar('--pink')]);
+    drawSeries(document.getElementById('ch-ping'),pts.map(p=>({ping_ms:p.ping_ms||0})),['ping_ms'],['#b6ff00']);
+  }catch(err){toast(err.message,false);}
 }
 async function doFw(how){
   const e=document.getElementById('fw-err');e.style.display='none';
@@ -543,10 +732,11 @@ async function doFw(how){
 function showTab(n,btn){
   ['tunnels','system','network','panel'].forEach(x=>
     document.getElementById('sec-'+x).classList.toggle('hidden',x!==n));
+  document.getElementById('sec-detail').classList.add('hidden');DETAIL=null;
   document.querySelectorAll('#tabs .tab').forEach(b=>b.classList.remove('active'));
   if(btn)btn.classList.add('active');
   if(n==='system'){loadHealth();loadTg();}
-  if(n==='network'){loadMode();loadCron();loadTcp();loadDns();}
+  if(n==='network'){loadMode();loadCron();loadTcp();loadDns();loadSpeed();}
   if(n==='panel'){loadPanelInfo();}
 }
 /* ---- system ---- */
@@ -821,7 +1011,150 @@ async function updateLog(auto){
         if(!q.running)clearInterval(UPD_TIMER);}catch(e){clearInterval(UPD_TIMER);}},3000);}
   }catch(err){toast(err.message,false);}
 }
-refresh().catch(()=>{});
+function openFw(name){FW_TUNNEL=name;
+  document.getElementById('fw-tun').textContent='TUNNEL: '+name;
+  document.getElementById('fw-err').style.display='none';
+  document.getElementById('modal-fw').classList.add('open');}
+function closeFw(){document.getElementById('modal-fw').classList.remove('open');}
+/* ---- create wizard ---- */
+let WZ={step:1,data:{},body:{}};
+const WZ_STEPS=['SIDE & NAME','ADDRESSES','ADVANCED','REVIEW'];
+function openCreate(){WZ={step:1,data:{},body:{}};
+  document.getElementById('mc-err').style.display='none';
+  document.getElementById('mc-mode').textContent='MODE: '+MODE.toUpperCase();
+  wzRender();document.getElementById('modal').classList.add('open');}
+function closeCreate(){document.getElementById('modal').classList.remove('open');}
+function wzIn(id,label,ph,value){
+  return `<div><label>${label}</label><input id="${id}" placeholder="${ph||''}" value="${esc(value||'')}"></div>`;}
+function wzSel(id,label,opts,value){
+  return `<div><label>${label}</label><select id="${id}">`+
+    opts.map(o=>`<option value="${o}"${o===value?' selected':''}>${o}</option>`).join('')+`</select></div>`;}
+function wzRender(){
+  const d=WZ.data,et=MODE==='easytier';
+  document.getElementById('wz-steps').innerHTML=WZ_STEPS.map((s,i)=>
+    `<div class="step${WZ.step===i+1?' on':''}${WZ.step>i+1?' done':''}">${i+1} · ${s}</div>`).join('');
+  let h='';
+  if(WZ.step===1){
+    h=`<div class="grid2">${wzSel('w-side','SIDE',['IRAN','KHAREJ'],d.side||'IRAN')}
+      ${wzIn('w-name','NAME','tunnel1',d.name)}</div>
+      <div class="hint">Name: letters, numbers, dashes. Must be unique on this server.</div>`;
+  }else if(WZ.step===2){
+    h=et?`<div class="grid2">${wzIn('w-etip','TUNNEL INTERFACE IP','auto (e.g. 10.155.155.1)',d.etip)}
+      ${wzIn('w-etpeer','PEER SERVER PUBLIC IP *','9.9.9.9',d.etpeer)}</div>
+      <div class="grid2">${wzIn('w-etport','MESH PORT','auto (2070)',d.etport)}</div>`
+    :`<div class="grid2">${wzIn('w-local','LOCAL SERVER PUBLIC IP *','1.2.3.4',d.local)}
+      ${wzIn('w-remote','REMOTE SERVER PUBLIC IP *','5.6.7.8',d.remote)}</div>
+      <div class="grid2">${wzSel('w-encap','ENCAP',['ip','udp'],d.encap||'ip')}</div>
+      <div class="hint">UDP pierces some filters better; IP is simpler.</div>`;
+  }else if(WZ.step===3){
+    h=et?`<div class="grid2">${wzIn('w-ethost','HOSTNAME','auto',d.ethost)}
+      ${wzIn('w-etsec','NETWORK SECRET','vortexl2',d.etsec)}</div>
+      <div class="grid2">${wzIn('w-etrf','REMOTE FORWARD IP (IRAN side)','auto',d.etrf)}</div>
+      <div class="hint">Secret + mesh port must match the other server. Network name auto-derives from secret.</div>`
+    :`<div class="grid2">${wzIn('w-ifip','INTERFACE IP','auto',d.ifip)}
+      ${wzIn('w-rfwd','REMOTE FORWARD IP (IRAN)','auto',d.rfwd)}</div>
+      <div class="grid2">${wzIn('w-udp','UDP PORT (udp encap)','auto',d.udp)}
+      ${wzIn('w-tid','TUNNEL ID','auto',d.tid)}</div>
+      <div class="grid2">${wzIn('w-ptid','PEER TUNNEL ID','auto',d.ptid)}
+      ${wzIn('w-sid','SESSION ID','auto',d.sid)}</div>
+      <div class="grid2">${wzIn('w-psid','PEER SESSION ID','auto',d.psid)}</div>
+      <div class="hint">Empty = smart auto value. IDs must mirror the other server.</div>`;
+  }else{
+    wzCollect();
+    const rows=Object.entries(WZ.body).filter(([,v])=>v!==''&&v!=null)
+      .map(([k,v])=>k+': '+v).join('\n')||'(defaults)';
+    h=`<div class="review">${esc(rows)}</div>
+      <div class="hint">Deploy creates the tunnel and starts it immediately.</div>`;
+  }
+  document.getElementById('wz-body').innerHTML=h;
+  document.getElementById('wz-back').style.visibility=WZ.step===1?'hidden':'visible';
+  document.getElementById('wz-next').textContent=WZ.step===4?t('deploy'):'NEXT ▸';
+  document.getElementById('mc-err').style.display='none';
+}
+function wzCollect(){
+  const g=id=>{const el=document.getElementById(id);return el?el.value.trim():'';};
+  Object.assign(WZ.data,{side:g('w-side')||WZ.data.side||'IRAN',name:g('w-name')||WZ.data.name||'',
+    local:g('w-local'),remote:g('w-remote'),encap:g('w-encap')||WZ.data.encap||'ip',
+    ifip:g('w-ifip'),rfwd:g('w-rfwd'),udp:g('w-udp'),tid:g('w-tid'),ptid:g('w-ptid'),
+    sid:g('w-sid'),psid:g('w-psid'),etip:g('w-etip'),etpeer:g('w-etpeer'),etport:g('w-etport'),
+    ethost:g('w-ethost'),etsec:g('w-etsec'),etrf:g('w-etrf')});
+  const d=WZ.data;
+  if(MODE==='easytier'){
+    WZ.body={side:d.side||'IRAN',name:d.name||'',local_ip:d.etip||'',peer_ip:d.etpeer||'',
+      port:d.etport||'',hostname:d.ethost||'',network_secret:d.etsec||'',remote_forward_ip:d.etrf||''};
+  }else{
+    WZ.body={side:d.side||'IRAN',name:d.name||'',local_ip:d.local||'',remote_ip:d.remote||'',
+      interface_ip:d.ifip||'',remote_forward_ip:d.rfwd||'',encap:d.encap||'ip',udp_port:d.udp||'',
+      tunnel_id:d.tid||'',peer_tunnel_id:d.ptid||'',session_id:d.sid||'',peer_session_id:d.psid||''};
+  }
+}
+function wzValid(){
+  const e=document.getElementById('mc-err');
+  const bad=m=>{e.textContent=m;e.style.display='block';return false;};
+  if(WZ.step===1&&!document.getElementById('w-name').value.trim())return bad('Name is required');
+  if(WZ.step===2){
+    if(MODE==='easytier'){if(!document.getElementById('w-etpeer').value.trim())return bad('Peer server public IP is required');}
+    else{if(!document.getElementById('w-local').value.trim())return bad('Local server public IP is required');
+      if(!document.getElementById('w-remote').value.trim())return bad('Remote server public IP is required');}
+  }
+  e.style.display='none';return true;
+}
+function wzNav(d){
+  if(d>0){
+    if(WZ.step<4){wzCollect();if(!wzValid())return;WZ.step++;wzRender();}
+    else{wzDeploy();}
+  }else{WZ.step=Math.max(1,WZ.step-1);wzRender();}
+}
+async function wzDeploy(){
+  const e=document.getElementById('mc-err');e.style.display='none';
+  const b=document.getElementById('wz-next');b.disabled=true;
+  try{const r=await api('/api/tunnel/create',WZ.body);
+    if(r.ok){closeCreate();log('[CREATE]\n'+r.message);toast('Tunnel deployed ✓');refresh();}
+    else{e.textContent=r.message||r.error;e.style.display='block';}
+  }catch(err){e.textContent=err.message;e.style.display='block';}
+  b.disabled=false;
+}
+/* ---- network: speed test ---- */
+async function loadSpeed(){
+  try{const r=await api('/api/speed/status');
+    if(!r.ok)return;
+    document.getElementById('speedbox').innerHTML=
+      `<div>IPERF3 <b>${r.installed?'INSTALLED':'NOT INSTALLED'}</b></div>
+       <div>SERVER <b>${r.server_running?'RUNNING :5201':'STOPPED'}</b></div>
+       ${r.result&&r.result.mbps_received!==undefined?`<div>LAST <b>▼ ${esc(r.result.mbps_received)} Mbps · ▲ ${esc(r.result.mbps_sent)} Mbps</b></div>`:''}
+       <div>STATE <b>${esc(r.phase||'idle')}${r.running?' …':''}</b> ${esc(r.message||'')}</div>`;
+    const sel=document.getElementById('sp-target');
+    if(sel&&!sel.options.length){(r.targets||[]).forEach(x=>{const o=document.createElement('option');
+      o.value=x.ip;o.textContent=`${x.tunnel} · ${x.label} · ${x.ip}`;sel.appendChild(o);});}
+  }catch(err){toast(err.message,false);}
+}
+async function speedInstall(){
+  try{const r=await api('/api/speed/install',{});toast(r.message||'done',r.ok);
+    if(r.ok)setTimeout(loadSpeed,4000);}catch(err){toast(err.message,false);}
+}
+async function speedServer(a){
+  try{const r=await api('/api/speed/server',{action:a});toast(r.message||'done',r.ok);loadSpeed();
+  }catch(err){toast(err.message,false);}
+}
+let SPD_TIMER=null;
+async function speedRun(){
+  const ip=document.getElementById('sp-target').value,
+        dur=parseInt(document.getElementById('sp-dur').value,10);
+  if(!ip){toast('No target available',false);return;}
+  try{const r=await api('/api/speed/run',{target:ip,duration:dur});
+    if(!r.ok){toast(r.message||'failed',false);return;}
+    toast('Speed test running …');document.getElementById('speedres').textContent='Testing '+ip+' …';
+    clearInterval(SPD_TIMER);SPD_TIMER=setInterval(async()=>{
+      try{const q=await api('/api/speed/status');
+        document.getElementById('speedres').innerHTML='<b>'+esc(q.message||'')+'</b>';
+        if(!q.running){clearInterval(SPD_TIMER);
+          if(q.result)document.getElementById('speedres').innerHTML+=
+            `<br>▼ ${esc(q.result.mbps_received)} Mbps · ▲ ${esc(q.result.mbps_sent)} Mbps · retrans ${esc(q.result.retransmits)}`;
+          loadSpeed();}
+      }catch(e){clearInterval(SPD_TIMER);}},3000);
+  }catch(err){toast(err.message,false);}
+}
+refresh().catch(()=>{});applyLang();
 </script>
 </body>
 </html>

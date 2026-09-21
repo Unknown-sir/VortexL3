@@ -56,6 +56,9 @@ TLS_KEY_FILE = Path("/etc/vortexl3/panel.key")
 TLS_CERT_FILE = Path("/etc/vortexl3/panel.crt")
 ALERTS_FILE = Path("/etc/vortexl3/alerts.yaml")
 UPDATE_LOG_FILE = Path("/var/log/vortexl3/update.log")
+HISTORY_FILE = Path("/var/lib/vortexl3/traffic_history.json")
+HISTORY_INTERVAL = 30
+HISTORY_MAX = 2880  # ~24h at 30s samples
 PANEL_SERVICE = "vortexl3-panel"
 FORWARD_DAEMON_SERVICE = "vortexl3-forward-daemon"
 TUNNELS_DIR = Path("/etc/vortexl3/tunnels")
@@ -1110,25 +1113,15 @@ def ping_tunnel_api(name: str) -> tuple:
     name = sanitize_name(name)
     if not name:
         return False, "Invalid tunnel name"
-    targets = []
     try:
         if get_mode() == "easytier":
             from .easytier_manager import EasyTierConfigManager
             config = EasyTierConfigManager().get_tunnel(name)
-            if not config:
-                return False, f"Tunnel '{name}' not found"
-            if config.remote_forward_ip and is_valid_ip(config.remote_forward_ip):
-                targets.append(("tunnel peer", config.remote_forward_ip))
-            if config.peer_ip and is_valid_ip(config.peer_ip):
-                targets.append(("server", config.peer_ip))
         else:
             config = ConfigManager().get_tunnel(name)
-            if not config:
-                return False, f"Tunnel '{name}' not found"
-            if config.remote_forward_ip and is_valid_ip(config.remote_forward_ip):
-                targets.append(("tunnel peer", config.remote_forward_ip))
-            if config.remote_ip and is_valid_ip(config.remote_ip):
-                targets.append(("server", config.remote_ip))
+        if not config:
+            return False, f"Tunnel '{name}' not found"
+        targets = _peer_ips_for_card(config, get_mode())
     except Exception as e:  # noqa: BLE001
         return False, f"Error: {e}"
     if not targets:
@@ -1524,6 +1517,269 @@ def update_log_api() -> dict:
 
 
 # ----------------------------------------------------------------------------
+# Traffic history (charts) + iperf3 speed test
+# ----------------------------------------------------------------------------
+
+_history: list = []
+_history_lock = threading.Lock()
+
+
+def history_load() -> None:
+    try:
+        if HISTORY_FILE.exists():
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    with _history_lock:
+                        _history.clear()
+                        _history.extend(data[-HISTORY_MAX:])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("History load failed: %s", e)
+
+
+def history_save() -> None:
+    try:
+        HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _history_lock:
+            snapshot = list(_history[-HISTORY_MAX:])
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(snapshot, f)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("History save failed: %s", e)
+
+
+def _peer_ips_for_card(config, mode: str) -> list:
+    """Pingable peer IPs for a tunnel config: [(label, ip)]."""
+    targets = []
+    if mode == "easytier":
+        if getattr(config, "remote_forward_ip", None) and is_valid_ip(config.remote_forward_ip):
+            targets.append(("tunnel peer", config.remote_forward_ip))
+        if getattr(config, "peer_ip", None) and is_valid_ip(config.peer_ip):
+            targets.append(("server", config.peer_ip))
+    else:
+        if getattr(config, "remote_forward_ip", None) and is_valid_ip(config.remote_forward_ip):
+            targets.append(("tunnel peer", config.remote_forward_ip))
+        if getattr(config, "remote_ip", None) and is_valid_ip(config.remote_ip):
+            targets.append(("server", config.remote_ip))
+    return targets
+
+
+def history_sample_once() -> int:
+    """Take one traffic+ping sample for every tunnel. Returns sample count."""
+    from .monitoring import MetricsCollector
+    mode = get_mode()
+    try:
+        if mode == "easytier":
+            from .easytier_manager import EasyTierConfigManager
+            configs = EasyTierConfigManager().get_all_tunnels()
+        else:
+            configs = ConfigManager().get_all_tunnels()
+    except Exception:  # noqa: BLE001
+        return 0
+    now = int(time.time())
+    count = 0
+    for config in configs:
+        try:
+            stats = MetricsCollector.get_interface_stats(config.interface_name)
+        except Exception:  # noqa: BLE001
+            stats = {}
+        ping_ms, loss = None, None
+        if stats:
+            for _, ip in _peer_ips_for_card(config, mode)[:1]:
+                res = ping_host(ip, count=1)
+                ping_ms, loss = res["avg_ms"], res["loss_pct"]
+                break
+        with _history_lock:
+            _history.append({"ts": now, "name": config.name,
+                             "iface": config.interface_name,
+                             "rx": int(stats.get("rx_bytes", 0)),
+                             "tx": int(stats.get("tx_bytes", 0)),
+                             "ping_ms": ping_ms, "loss": loss})
+            while len(_history) > HISTORY_MAX:
+                _history.pop(0)
+        count += 1
+    if count:
+        history_save()
+    return count
+
+
+def history_worker(interval: int = HISTORY_INTERVAL) -> None:
+    history_load()
+    while True:
+        try:
+            history_sample_once()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("History sample failed: %s", e)
+        time.sleep(interval)
+
+
+def history_api(name: str, hours: float = 6) -> tuple:
+    """Downsampled per-tunnel series with Mbps rates + ping."""
+    name = sanitize_name(name)
+    try:
+        hours = max(0.25, min(24, float(hours or 6)))
+    except (TypeError, ValueError):
+        hours = 6
+    cutoff = time.time() - hours * 3600
+    with _history_lock:
+        points = [p for p in _history if p.get("name") == name and p.get("ts", 0) >= cutoff - 3600]
+    points.sort(key=lambda p: p["ts"])
+    series = []
+    prev = None
+    for p in points:
+        if p["ts"] < cutoff and prev is not None:
+            prev = p
+            continue
+        if p["ts"] < cutoff:
+            prev = p
+            continue
+        rx_mbps = tx_mbps = 0.0
+        if prev and p["ts"] > prev["ts"]:
+            dt = p["ts"] - prev["ts"]
+            rx_mbps = round(max(p["rx"] - prev["rx"], 0) * 8 / 1_000_000 / dt, 3)
+            tx_mbps = round(max(p["tx"] - prev["tx"], 0) * 8 / 1_000_000 / dt, 3)
+        series.append({"t": p["ts"], "rx": p["rx"], "tx": p["tx"],
+                       "rx_mbps": rx_mbps, "tx_mbps": tx_mbps,
+                       "ping_ms": p.get("ping_ms"), "loss": p.get("loss")})
+        prev = p
+    # Cap density for the chart
+    if len(series) > 600:
+        step = len(series) // 600 + 1
+        series = series[::step]
+    return True, {"name": name, "hours": hours, "points": series}
+
+
+_speed_state = {"running": False, "phase": "idle", "message": "", "result": None}
+_speed_lock = threading.Lock()
+
+
+def speed_targets_api() -> list:
+    """Allowed iperf3 targets derived from tunnel configs."""
+    targets = []
+    seen = set()
+    try:
+        mode = get_mode()
+        if mode == "easytier":
+            from .easytier_manager import EasyTierConfigManager
+            configs = EasyTierConfigManager().get_all_tunnels()
+        else:
+            configs = ConfigManager().get_all_tunnels()
+        for config in configs:
+            for label, ip in _peer_ips_for_card(config, mode):
+                if ip not in seen:
+                    seen.add(ip)
+                    targets.append({"tunnel": config.name, "label": label, "ip": ip})
+    except Exception:  # noqa: BLE001
+        pass
+    return targets
+
+
+def speed_status_api() -> dict:
+    ok, _, _ = run_command("which iperf3")
+    installed = ok
+    running = False
+    if installed:
+        ok2, out, _ = run_command("pgrep -f 'iperf3.*-s' 2>/dev/null")
+        running = ok2 and bool(out)
+    with _speed_lock:
+        state = dict(_speed_state)
+    return {"installed": installed, "server_running": running,
+            "targets": speed_targets_api(), **state}
+
+
+def _speed_install_worker() -> None:
+    with _speed_lock:
+        _speed_state.update({"running": True, "phase": "installing",
+                             "message": "Installing iperf3...", "result": None})
+    ok, out, err = run_command("apt-get update -qq && apt-get install -y -qq iperf3", timeout=300)
+    with _speed_lock:
+        _speed_state.update({"running": False, "phase": "done",
+                             "message": "iperf3 installed" if ok else f"Install failed: {(err or out or '')[:300]}",
+                             "result": {"installed": ok}})
+
+
+def speed_install_api() -> tuple:
+    with _speed_lock:
+        if _speed_state["running"]:
+            return False, "A speed task is already running"
+    ok, _, _ = run_command("which iperf3")
+    if ok:
+        return True, "iperf3 is already installed"
+    threading.Thread(target=_speed_install_worker, daemon=True).start()
+    return True, "Installing iperf3 in background..."
+
+
+def speed_server_api(action: str) -> tuple:
+    action = (action or "").lower()
+    if action == "start":
+        ok, _, _ = run_command("which iperf3")
+        if not ok:
+            return False, "iperf3 is not installed"
+        run_command("iptables -C INPUT -p tcp --dport 5201 -j ACCEPT 2>/dev/null || "
+                    "iptables -I INPUT -p tcp --dport 5201 -j ACCEPT 2>/dev/null")
+        ok, out, err = run_command("iperf3 -s -D -p 5201 2>&1")
+        if not ok and "already" not in ((out or "") + (err or "")).lower():
+            return False, f"Could not start iperf3 server: {(err or out or '')[:200]}"
+        return True, "iperf3 server started on port 5201"
+    if action == "stop":
+        run_command("pkill -f 'iperf3.*-s' 2>/dev/null")
+        return True, "iperf3 server stopped"
+    return False, "Action must be start or stop"
+
+
+def _speed_run_worker(ip: str, duration: int) -> None:
+    with _speed_lock:
+        _speed_state.update({"running": True, "phase": "testing",
+                             "message": f"Testing {ip} for {duration}s...", "result": None})
+    ok, out, err = run_command(f"iperf3 -c {ip} -p 5201 -t {duration} -J 2>&1",
+                               timeout=duration + 30)
+    result = None
+    message = ""
+    if ok and out:
+        try:
+            data = json.loads(out)
+            end = data.get("end", {})
+            sent = end.get("sum_sent", {})
+            recv = end.get("sum_received", {})
+            result = {
+                "target": ip,
+                "mbps_sent": round(sent.get("bits_per_second", 0) / 1_000_000, 2),
+                "mbps_received": round(recv.get("bits_per_second", 0) / 1_000_000, 2),
+                "retransmits": sent.get("retransmits"),
+                "duration": duration,
+            }
+            message = (f"{ip}: {result['mbps_received']} Mbps down / "
+                       f"{result['mbps_sent']} Mbps up")
+        except Exception as e:  # noqa: BLE001
+            message = f"Parse failed: {e}"
+    else:
+        message = f"Test failed: {(err or out or 'no output')[:300]}"
+    with _speed_lock:
+        _speed_state.update({"running": False, "phase": "done",
+                             "message": message, "result": result})
+
+
+def speed_run_api(ip: str, duration) -> tuple:
+    allowed = {t["ip"] for t in speed_targets_api()}
+    if ip not in allowed:
+        return False, "Target is not a known tunnel peer IP"
+    try:
+        duration = int(duration)
+    except (TypeError, ValueError):
+        return False, "Invalid duration"
+    if duration not in (5, 10, 30):
+        return False, "Duration must be 5, 10 or 30 seconds"
+    ok, _, _ = run_command("which iperf3")
+    if not ok:
+        return False, "iperf3 is not installed"
+    with _speed_lock:
+        if _speed_state["running"]:
+            return False, "A speed task is already running"
+    threading.Thread(target=_speed_run_worker, args=(ip, duration), daemon=True).start()
+    return True, f"Speed test to {ip} started ({duration}s)..."
+
+
+# ----------------------------------------------------------------------------
 # HTTP layer
 # ----------------------------------------------------------------------------
 
@@ -1641,6 +1897,14 @@ class PanelHandler(BaseHTTPRequestHandler):
                 _json_response(self, 200, {"ok": True, **dns_scan_state_api()})
             elif path == "/api/stats":
                 _json_response(self, 200, {"ok": True, "traffic": traffic_stats_api()})
+            elif path == "/api/history":
+                query = parse_qs(parsed.query)
+                ok, result = history_api(query.get("name", [""])[0],
+                                         query.get("hours", ["6"])[0])
+                _json_response(self, 200 if ok else 400,
+                               {"ok": ok, **({"series": result} if ok else {"error": result})})
+            elif path == "/api/speed/status":
+                _json_response(self, 200, {"ok": True, **speed_status_api()})
             elif path == "/api/alerts/status":
                 _json_response(self, 200, {"ok": True, **alerts_status_api()})
             elif path == "/api/peer/card":
@@ -1744,6 +2008,15 @@ class PanelHandler(BaseHTTPRequestHandler):
                 ok, result = ping_tunnel_api(data.get("name", ""))
                 _json_response(self, 200 if ok else 400,
                                {"ok": ok, **({"results": result} if ok else {"error": result})})
+            elif path == "/api/speed/install":
+                ok, msg = speed_install_api()
+                _json_response(self, 200 if ok else 400, {"ok": ok, "message": msg})
+            elif path == "/api/speed/server":
+                ok, msg = speed_server_api(data.get("action", ""))
+                _json_response(self, 200 if ok else 400, {"ok": ok, "message": msg})
+            elif path == "/api/speed/run":
+                ok, msg = speed_run_api(data.get("target", ""), data.get("duration", 10))
+                _json_response(self, 200 if ok else 400, {"ok": ok, "message": msg})
             elif path == "/api/alerts/config":
                 ok, msg = alerts_config_api(data.get("bot_token", ""),
                                             data.get("chat_id", ""),
@@ -1966,6 +2239,11 @@ def main() -> int:
     # Telegram down/up monitor (acts only when configured + enabled)
     monitor = threading.Thread(target=alert_monitor_loop, kwargs={"interval": 60}, daemon=True)
     monitor.start()
+
+    # Traffic/ping history sampler for charts (acts when tunnels exist)
+    sampler = threading.Thread(target=history_worker, kwargs={"interval": HISTORY_INTERVAL},
+                               daemon=True)
+    sampler.start()
 
     try:
         server.serve_forever()
