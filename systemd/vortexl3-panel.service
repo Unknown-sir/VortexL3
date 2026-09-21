@@ -1,0 +1,26 @@
+[Unit]
+Description=VortexL3 Web Panel (Cyber Tunnel Control)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vortexl3
+Environment=PYTHONPATH=/opt/vortexl3
+ExecStart=/usr/bin/python3 -m vortexl3.web_panel
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vortexl3-panel
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Resource limits
+LimitNOFILE=16384
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

@@ -29,6 +29,7 @@ def show_easytier_main_menu() -> str:
         ("7", "Tunnel Auto-Restart"),
         ("8", "View Logs"),
         ("9", "DNS Manager"),
+        ("10", "Web Panel"),
         ("0", "Exit"),
     ]
     

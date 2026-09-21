@@ -673,6 +673,121 @@ def handle_easytier_cron_menu():
         ui.wait_for_enter()
 
 
+def handle_web_panel_menu():
+    """Handle Web Panel management menu (enable, credentials, port, status)."""
+    from vortexl3.web_panel import (
+        PanelConfig, get_server_ip, find_free_port, is_port_free,
+        ensure_panel_firewall, PANEL_SERVICE,
+    )
+
+    def service_active() -> bool:
+        result = subprocess.run(
+            f"systemctl is-active {PANEL_SERVICE}",
+            shell=True, capture_output=True, text=True
+        )
+        return result.returncode == 0 and "active" in (result.stdout or "")
+
+    def show_access(cfg: PanelConfig, password=None):
+        url = f"http://{get_server_ip()}:{cfg.port}"
+        ui.console.print()
+        ui.console.print(f"[bold white]Panel URL:[/] [bold cyan]{url}[/]")
+        ui.console.print(f"[bold white]Username:[/] [bold yellow]{cfg.username}[/]")
+        if password:
+            ui.console.print(f"[bold white]Password:[/] [bold red]{password}[/]")
+            ui.console.print("[dim]Save this password now - it cannot be shown again "
+                             "(use Regenerate to get a new one).[/]")
+        else:
+            ui.console.print("[dim]Password is stored hashed and cannot be shown. "
+                             "Use option 4 to regenerate.[/]")
+        ui.console.print(f"[bold white]Port:[/] {cfg.port}  |  "
+                         f"[bold white]Service:[/] {'[green]Active[/]' if service_active() else '[red]Stopped[/]'}")
+
+    while True:
+        ui.clear_screen()
+        ui.show_banner()
+        cfg = PanelConfig()
+
+        ui.console.print("\n[bold white]Web Panel[/]")
+        if cfg.exists:
+            show_access(cfg)
+        else:
+            ui.console.print("[yellow]Web Panel is not set up yet. Choose Enable to create access.[/]")
+        ui.console.print()
+        ui.console.print("[bold cyan][1][/] Enable & Start (generates access)")
+        ui.console.print("[bold cyan][2][/] Stop Panel")
+        ui.console.print("[bold cyan][3][/] Restart Panel")
+        ui.console.print("[bold cyan][4][/] Regenerate Username & Password")
+        ui.console.print("[bold cyan][5][/] Change Port (random free)")
+        ui.console.print("[bold cyan][6][/] Show Access Info")
+        ui.console.print("[bold cyan][0][/] Back")
+
+        choice = ui.Prompt.ask("\n[bold cyan]Select option[/]", default="0")
+
+        if choice == "0":
+            break
+        elif choice == "1":
+            is_new, username, password = cfg.ensure_initialized()
+            if not is_port_free(cfg.port):
+                cfg.set_port(find_free_port())
+                ui.show_warning(f"Port was busy, switched to {cfg.port}")
+            ensure_panel_firewall(cfg.port)
+            subprocess.run(f"systemctl enable {PANEL_SERVICE}",
+                           shell=True, capture_output=True)
+            subprocess.run(f"systemctl restart {PANEL_SERVICE}",
+                           shell=True, capture_output=True)
+            import time as _time
+            _time.sleep(1)
+            if service_active():
+                ui.show_success("Web Panel is running!")
+            else:
+                ui.show_error("Service failed to start. Check: journalctl -u vortexl3-panel")
+            show_access(cfg, password if is_new else None)
+            ui.wait_for_enter()
+        elif choice == "2":
+            subprocess.run(f"systemctl stop {PANEL_SERVICE}", shell=True, capture_output=True)
+            subprocess.run(f"systemctl disable {PANEL_SERVICE}", shell=True, capture_output=True)
+            ui.show_success("Web Panel stopped and disabled")
+            ui.wait_for_enter()
+        elif choice == "3":
+            if not cfg.exists:
+                ui.show_error("Panel is not set up yet. Use Enable first.")
+            else:
+                ensure_panel_firewall(cfg.port)
+                subprocess.run(f"systemctl restart {PANEL_SERVICE}", shell=True, capture_output=True)
+                ui.show_success("Web Panel restarted")
+                show_access(cfg)
+            ui.wait_for_enter()
+        elif choice == "4":
+            if not cfg.exists:
+                ui.show_error("Panel is not set up yet. Use Enable first.")
+            else:
+                username, password = cfg.regenerate_credentials()
+                subprocess.run(f"systemctl restart {PANEL_SERVICE}", shell=True, capture_output=True)
+                ui.show_success("New credentials generated!")
+                show_access(cfg, password)
+            ui.wait_for_enter()
+        elif choice == "5":
+            if not cfg.exists:
+                ui.show_error("Panel is not set up yet. Use Enable first.")
+            else:
+                new_port = find_free_port()
+                cfg.set_port(new_port)
+                ensure_panel_firewall(new_port)
+                subprocess.run(f"systemctl restart {PANEL_SERVICE}", shell=True, capture_output=True)
+                ui.show_success(f"Panel port changed to {new_port}")
+                show_access(cfg)
+            ui.wait_for_enter()
+        elif choice == "6":
+            if not cfg.exists:
+                ui.show_error("Panel is not set up yet. Use Enable first.")
+            else:
+                show_access(cfg)
+            ui.wait_for_enter()
+        else:
+            ui.show_warning("Invalid option")
+            ui.wait_for_enter()
+
+
 def handle_dns_menu():
     """Handle DNS Manager menu."""
     from vortexl3 import dns_manager
@@ -771,6 +886,8 @@ def main_menu_l2tpv3():
                 handle_forwards_menu(manager)
             elif choice == "6":
                 handle_logs(manager)
+            elif choice == "7":
+                handle_web_panel_menu()
             else:
                 ui.show_warning("Invalid option")
                 ui.wait_for_enter()
@@ -814,6 +931,8 @@ def main_menu_easytier():
                 handle_logs(ConfigManager())
             elif choice == "9":
                 handle_dns_menu()
+            elif choice == "10":
+                handle_web_panel_menu()
             else:
                 ui.show_warning("Invalid option")
                 ui.wait_for_enter()

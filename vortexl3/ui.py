@@ -173,6 +173,7 @@ def show_main_menu() -> str:
         ("4", "List Tunnels"),
         ("5", "Port Forwards"),
         ("6", "View Logs"),
+        ("7", "Web Panel"),
         ("0", "Exit"),
     ]
     

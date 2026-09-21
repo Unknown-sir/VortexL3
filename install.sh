@@ -391,6 +391,7 @@ if [ "$TUNNEL_MODE" = "l2tpv3" ]; then
 fi
 cp "$INSTALL_DIR/systemd/vortexl3-forward-daemon.service" "$SYSTEMD_DIR/"
 cp "$INSTALL_DIR/systemd/vortexl3-watchdog.service" "$SYSTEMD_DIR/"
+cp "$INSTALL_DIR/systemd/vortexl3-panel.service" "$SYSTEMD_DIR/"
 
 systemctl daemon-reload
 
@@ -421,11 +422,15 @@ if [ "$TUNNEL_MODE" = "l2tpv3" ]; then
 fi
 systemctl enable vortexl3-forward-daemon.service 2>/dev/null || true
 systemctl enable vortexl3-watchdog.service 2>/dev/null || true
+systemctl enable vortexl3-panel.service 2>/dev/null || true
 
 # Start services
 echo -e "${YELLOW}Starting VortexL3 services...${NC}"
 systemctl restart vortexl3-watchdog.service 2>/dev/null || systemctl start vortexl3-watchdog.service 2>/dev/null || true
 echo -e "${GREEN}  ✓ vortexl3-watchdog service started${NC}"
+systemctl restart vortexl3-panel.service 2>/dev/null || systemctl start vortexl3-panel.service 2>/dev/null || true
+echo -e "${GREEN}  ✓ vortexl3-panel service started (Web Panel)${NC}"
+echo -e "${YELLOW}  ℹ Web Panel access: run 'sudo vortexl3' → Web Panel to view URL & credentials${NC}"
 
 if [ "$TUNNEL_MODE" = "l2tpv3" ]; then
     if systemctl is-active --quiet vortexl3-tunnel.service 2>/dev/null; then

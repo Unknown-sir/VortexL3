@@ -4,7 +4,6 @@
 
 A modular, production-quality CLI tool for managing L2TPv3 or EasyTier mesh tunnels with HAProxy-based port forwarding.
 
-
 ## ✨ Features
 
 - 🔧 Interactive TUI management panel with Rich
@@ -26,7 +25,7 @@ During installation, choose:
 ### Install Specific Version
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/Unknown-sir/VortexL3/main/install.sh) v5.0.1
+bash <(curl -Ls https://raw.githubusercontent.com/Unknown-sir/VortexL3/main/install.sh) v5.1.0
 ```
 
 ## 🚀 Quick Start
@@ -70,6 +69,31 @@ sudo vortexl3
 > Keep Network Name on **auto** and peering always matches, even if the
 > tunnel names differ per server.
 
+## 🌐 Web Panel
+
+Cyberpunk-themed browser panel to manage tunnels without SSH:
+
+- View tunnel status, peers and port forwards
+- Start / restart / stop / delete tunnels
+- Create new tunnels (IRAN / KHAREJ) with smart auto defaults
+
+Enable it from the TUI menu (`sudo vortexl3` → **Web Panel**). On enable,
+a random access URL, username, password and free port are generated:
+
+```bash
+sudo vortexl3        # → Web Panel → Enable & Start
+# Panel URL: http://SERVER-IP:PORT   (shown with username & password)
+```
+
+```bash
+# Check status
+sudo systemctl status vortexl3-panel
+journalctl -u vortexl3-panel -f
+```
+
+> Credentials are stored hashed (`/etc/vortexl3/panel.yaml`). The password is
+> shown only once at enable/regenerate time — use Regenerate to get a new one.
+
 ## 🔧 Services
 
 ```bash
@@ -77,6 +101,7 @@ sudo vortexl3
 sudo systemctl status vortexl3-tunnel          # L2TPv3
 sudo systemctl status vortexl3-easytier-*      # EasyTier
 sudo systemctl status vortexl3-forward-daemon
+sudo systemctl status vortexl3-panel           # Web Panel
 
 # View logs
 journalctl -u vortexl3-forward-daemon -f

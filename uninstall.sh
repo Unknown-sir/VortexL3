@@ -60,6 +60,7 @@ echo -e "${YELLOW}[1/6] Stopping VortexL3 services...${NC}"
 systemctl stop vortexl3-tunnel.service 2>/dev/null || true
 systemctl stop vortexl3-forward-daemon.service 2>/dev/null || true
 systemctl stop vortexl3-watchdog.service 2>/dev/null || true
+systemctl stop vortexl3-panel.service 2>/dev/null || true
 systemctl stop haproxy.service 2>/dev/null || true
 # Stop any socat services
 systemctl stop 'vortexl3-socat-*.service' 2>/dev/null || true
@@ -94,6 +95,7 @@ echo -e "${YELLOW}[4/7] Disabling VortexL3 services...${NC}"
 systemctl disable vortexl3-tunnel.service 2>/dev/null || true
 systemctl disable vortexl3-forward-daemon.service 2>/dev/null || true
 systemctl disable vortexl3-watchdog.service 2>/dev/null || true
+systemctl disable vortexl3-panel.service 2>/dev/null || true
 systemctl disable haproxy.service 2>/dev/null || true
 echo -e "${GREEN}  ✓ Services disabled${NC}"
 
@@ -102,6 +104,7 @@ echo -e "${YELLOW}[5/7] Removing systemd service files...${NC}"
 rm -f "$SYSTEMD_DIR/vortexl3-tunnel.service"
 rm -f "$SYSTEMD_DIR/vortexl3-forward-daemon.service"
 rm -f "$SYSTEMD_DIR/vortexl3-watchdog.service"
+rm -f "$SYSTEMD_DIR/vortexl3-panel.service"
 rm -f "$SYSTEMD_DIR/vortexl3-forward@.service"
 rm -f "$SYSTEMD_DIR"/vortexl3-socat-*.service
 rm -f /etc/modules-load.d/vortexl3.conf
