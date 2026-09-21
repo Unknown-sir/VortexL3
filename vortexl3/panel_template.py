@@ -459,10 +459,10 @@ canvas.spark{width:100%;height:44px}
 
 <script>
 let MODE="l2tpv3", FW_TUNNEL="";
-function toast(m,ok){const t=document.getElementById('toast');
-  t.textContent=m;t.style.display='block';
-  t.style.borderColor=ok===false?'var(--red)':'var(--neon)';clearTimeout(t._h);
-  t._h=setTimeout(()=>t.style.display='none',4200);}
+function toast(m,ok){const _el=document.getElementById('toast');
+  _el.textContent=m;_el.style.display='block';
+  _el.style.borderColor=ok===false?'var(--red)':'var(--neon)';clearTimeout(_el._h);
+  _el._h=setTimeout(()=>_el.style.display='none',4200);}
 function log(m){const l=document.getElementById('log');l.style.display='block';
   l.textContent=m+"\n"+l.textContent.slice(0,4000);}
 async function api(path,body){
@@ -497,16 +497,16 @@ async function refresh(){
     document.getElementById('m-mode').textContent=r.mode.toUpperCase();
     document.getElementById('m-ip').textContent=r.server_ip;
     document.getElementById('m-ver').textContent=r.version;
-    const t=r.tunnels;LAST=t;let on=0,fw=0;
-    t.forEach(x=>{if(x.running)on++;fw+=(x.forwards||[]).length;});
-    document.getElementById('s-total').textContent=t.length;
+    const tun=r.tunnels;LAST=tun;let on=0,fw=0;
+    tun.forEach(x=>{if(x.running)on++;fw+=(x.forwards||[]).length;});
+    document.getElementById('s-total').textContent=tun.length;
     document.getElementById('s-on').textContent=on;
-    document.getElementById('s-off').textContent=t.length-on;
+    document.getElementById('s-off').textContent=tun.length-on;
     document.getElementById('s-fw').textContent=fw;
-    document.getElementById('m-count').textContent=t.length+' TUNNELS';
+    document.getElementById('m-count').textContent=tun.length+' TUNNELS';
     const box=document.getElementById('tunnels');box.innerHTML='';
-    if(!t.length){box.innerHTML=`<div class="tun"><div class="tun-body">${t('no_tun')}</div></div>`;return;}
-    t.forEach(x=>{
+    if(!tun.length){box.innerHTML=`<div class="tun"><div class="tun-body">${t('no_tun')}</div></div>`;return;}
+    tun.forEach(x=>{
       const d=document.createElement('div');d.className='tun';
       const kv = x.type==='easytier'
         ? `<div>INTERFACE <b>${esc(x.interface||'-')}</b></div>
@@ -923,9 +923,9 @@ async function loadStats(){
   if(document.getElementById('sec-tunnels').classList.contains('hidden'))return;
   try{const r=await api('/api/stats');
     if(!r.ok)return;
-    (r.traffic||[]).forEach(t=>{
-      const el=document.getElementById('traf-'+CSS.escape(t.name));
-      if(el)el.innerHTML=`TRAFFIC<br>▼ ${fmtBytes(t.rx_bytes)} (${t.rx_mbps} Mbps) · ▲ ${fmtBytes(t.tx_bytes)} (${t.tx_mbps} Mbps)${t.errors?` · <span style="color:var(--red)">ERR ${t.errors}</span>`:''}`;
+    (r.traffic||[]).forEach(s=>{
+      const el=document.getElementById('traf-'+CSS.escape(s.name));
+      if(el)el.innerHTML=`TRAFFIC<br>▼ ${fmtBytes(s.rx_bytes)} (${s.rx_mbps} Mbps) · ▲ ${fmtBytes(s.tx_bytes)} (${s.tx_mbps} Mbps)${s.errors?` · <span style="color:var(--red)">ERR ${s.errors}</span>`:''}`;
     });
   }catch(e){}
 }
@@ -965,9 +965,9 @@ async function loadTg(){
   }catch(err){toast(err.message,false);}
 }
 async function tgSave(on){
-  const t=document.getElementById('tg-token').value.trim(),
+  const tok=document.getElementById('tg-token').value.trim(),
         c=document.getElementById('tg-chat').value.trim();
-  try{const r=await api('/api/alerts/config',{bot_token:t,chat_id:c,enabled:on});
+  try{const r=await api('/api/alerts/config',{bot_token:tok,chat_id:c,enabled:on});
     toast(r.message||'done',r.ok);loadTg();
   }catch(err){toast(err.message,false);}
 }
