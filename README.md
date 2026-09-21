@@ -79,7 +79,10 @@ Cyberpunk-themed browser panel to manage tunnels without SSH:
 - View service logs, system health and restart services
 - Switch forward mode (none / haproxy / socat), validate & reload
 - Auto-restart cron, TCP optimization, DNS manager
-- Change panel password and port from the panel itself
+- Live traffic stats, ping test, peer setup card
+- HTTPS with auto self-signed certificate
+- Telegram down/recovery alerts, backup & restore, one-click update
+- Change panel password, port and HTTPS from the panel itself
 
 Enable it from the TUI menu (`sudo vortexl3` → **Web Panel**). On enable,
 a random access URL, username, password and free port are generated:
@@ -97,6 +100,7 @@ journalctl -u vortexl3-panel -f
 
 > Credentials are stored hashed (`/etc/vortexl3/panel.yaml`). The password is
 > shown only once at enable/regenerate time — use Regenerate to get a new one.
+> HTTPS is on by default (self-signed cert, accept the browser warning).
 
 ## 🔧 Services
 

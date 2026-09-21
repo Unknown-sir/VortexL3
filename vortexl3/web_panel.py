@@ -25,9 +25,11 @@ import logging
 import os
 import secrets
 import socket
+import ssl
 import subprocess
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
@@ -50,8 +52,17 @@ logger = logging.getLogger("vortexl3-panel")
 
 PANEL_CONFIG_FILE = Path("/etc/vortexl3/panel.yaml")
 PANEL_LOG_FILE = Path("/var/log/vortexl3/panel.log")
+TLS_KEY_FILE = Path("/etc/vortexl3/panel.key")
+TLS_CERT_FILE = Path("/etc/vortexl3/panel.crt")
+ALERTS_FILE = Path("/etc/vortexl3/alerts.yaml")
+UPDATE_LOG_FILE = Path("/var/log/vortexl3/update.log")
 PANEL_SERVICE = "vortexl3-panel"
 FORWARD_DAEMON_SERVICE = "vortexl3-forward-daemon"
+TUNNELS_DIR = Path("/etc/vortexl3/tunnels")
+
+GITHUB_REPO = "Unknown-sir/VortexL3"
+INSTALLER_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/install.sh"
+RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
 SESSION_TTL = 12 * 3600
 SESSION_COOKIE = "vortex3sess"
@@ -178,6 +189,36 @@ def ensure_panel_firewall(port: int) -> None:
         run_command(f"iptables -I INPUT -p tcp --dport {port} -j ACCEPT 2>/dev/null")
 
 
+def ensure_tls_cert() -> tuple:
+    """Generate a self-signed TLS certificate for the panel if missing."""
+    if TLS_KEY_FILE.exists() and TLS_CERT_FILE.exists():
+        return True, "Certificate exists"
+    TLS_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ok, out, err = run_command(
+        f"openssl req -x509 -newkey rsa:2048 -keyout {TLS_KEY_FILE} "
+        f"-out {TLS_CERT_FILE} -days 825 -nodes -subj /CN=vortexl3-panel 2>&1",
+        timeout=60,
+    )
+    if not ok or not (TLS_KEY_FILE.exists() and TLS_CERT_FILE.exists()):
+        return False, f"openssl failed: {(err or out or 'unknown error')[:300]}"
+    try:
+        os.chmod(TLS_KEY_FILE, 0o600)
+    except Exception:  # noqa: BLE001
+        pass
+    return True, "Self-signed certificate generated"
+
+
+def tls_ready() -> bool:
+    """Check that a usable TLS certificate exists."""
+    return TLS_KEY_FILE.exists() and TLS_CERT_FILE.exists()
+
+
+def panel_url_for_config(cfg) -> str:
+    """Public panel URL for a config (used by TUI and API)."""
+    scheme = "https" if (cfg.https_enabled and tls_ready()) else "http"
+    return f"{scheme}://{get_server_ip()}:{cfg.port}"
+
+
 # ----------------------------------------------------------------------------
 # Panel configuration (credentials + port)
 # ----------------------------------------------------------------------------
@@ -224,6 +265,14 @@ class PanelConfig:
     @property
     def username(self) -> str:
         return self._data.get("username", "")
+
+    @property
+    def https_enabled(self) -> bool:
+        return bool(self._data.get("https", True))
+
+    def set_https(self, enabled: bool) -> None:
+        self._data["https"] = bool(enabled)
+        self._save()
 
     def ensure_initialized(self):
         """Generate port + credentials if missing. Returns (is_new, username, password|None)."""
@@ -985,6 +1034,496 @@ def dns_autocheck_api(action: str) -> tuple:
 
 
 # ----------------------------------------------------------------------------
+# Traffic stats + ping test
+# ----------------------------------------------------------------------------
+
+_rate_state: dict = {}
+_rate_lock = threading.Lock()
+
+
+def iface_traffic(interface: str) -> dict:
+    """RX/TX bytes + Mbps rates for an interface (rates need 2 samples)."""
+    from .monitoring import MetricsCollector
+    try:
+        cur = MetricsCollector.get_interface_stats(interface)
+    except Exception:  # noqa: BLE001
+        cur = {}
+    rx = int(cur.get("rx_bytes", 0))
+    tx = int(cur.get("tx_bytes", 0))
+    now = time.time()
+    with _rate_lock:
+        prev = _rate_state.get(interface)
+        _rate_state[interface] = (now, rx, tx)
+    rx_mbps = tx_mbps = 0.0
+    if prev:
+        dt = max(now - prev[0], 0.001)
+        rx_mbps = round(max(rx - prev[1], 0) * 8 / 1_000_000 / dt, 3)
+        tx_mbps = round(max(tx - prev[2], 0) * 8 / 1_000_000 / dt, 3)
+    return {"interface": interface, "rx_bytes": rx, "tx_bytes": tx,
+            "rx_mbps": rx_mbps, "tx_mbps": tx_mbps,
+            "errors": int(cur.get("rx_errors", 0)) + int(cur.get("tx_errors", 0))}
+
+
+def traffic_stats_api() -> list:
+    """Traffic stats for every configured tunnel interface."""
+    result = []
+    try:
+        mode = get_mode()
+        if mode == "easytier":
+            from .easytier_manager import EasyTierConfigManager
+            configs = EasyTierConfigManager().get_all_tunnels()
+        else:
+            configs = ConfigManager().get_all_tunnels()
+        for config in configs:
+            try:
+                stat = iface_traffic(config.interface_name)
+                stat["name"] = config.name
+                result.append(stat)
+            except Exception:  # noqa: BLE001
+                result.append({"name": config.name, "interface": "?",
+                               "rx_bytes": 0, "tx_bytes": 0,
+                               "rx_mbps": 0.0, "tx_mbps": 0.0, "errors": 0})
+    except Exception:  # noqa: BLE001
+        pass
+    return sorted(result, key=lambda s: s["name"])
+
+
+def ping_host(ip: str, count: int = 4) -> dict:
+    """Ping a host, return avg latency + loss."""
+    import re
+    result = {"ip": ip, "ok": False, "avg_ms": None, "loss_pct": 100.0, "output": ""}
+    ok, out, err = run_command(f"ping -c {count} -W 2 {ip} 2>&1", timeout=15)
+    text = out or err or ""
+    result["output"] = text[:800]
+    m = re.search(r"(\d+(?:\.\d+)?)% packet loss", text)
+    if m:
+        result["loss_pct"] = float(m.group(1))
+    m = re.search(r"rtt min/avg/max/mdev = [\d.]+/([\d.]+)/", text)
+    if m:
+        result["avg_ms"] = float(m.group(1))
+    result["ok"] = ok and result["loss_pct"] < 100
+    return result
+
+
+def ping_tunnel_api(name: str) -> tuple:
+    """Ping a tunnel's peer addresses (tunnel-network peer + public server)."""
+    name = sanitize_name(name)
+    if not name:
+        return False, "Invalid tunnel name"
+    targets = []
+    try:
+        if get_mode() == "easytier":
+            from .easytier_manager import EasyTierConfigManager
+            config = EasyTierConfigManager().get_tunnel(name)
+            if not config:
+                return False, f"Tunnel '{name}' not found"
+            if config.remote_forward_ip and is_valid_ip(config.remote_forward_ip):
+                targets.append(("tunnel peer", config.remote_forward_ip))
+            if config.peer_ip and is_valid_ip(config.peer_ip):
+                targets.append(("server", config.peer_ip))
+        else:
+            config = ConfigManager().get_tunnel(name)
+            if not config:
+                return False, f"Tunnel '{name}' not found"
+            if config.remote_forward_ip and is_valid_ip(config.remote_forward_ip):
+                targets.append(("tunnel peer", config.remote_forward_ip))
+            if config.remote_ip and is_valid_ip(config.remote_ip):
+                targets.append(("server", config.remote_ip))
+    except Exception as e:  # noqa: BLE001
+        return False, f"Error: {e}"
+    if not targets:
+        return False, "No pingable addresses for this tunnel"
+    results = []
+    for label, ip in targets:
+        entry = ping_host(ip)
+        entry["label"] = label
+        results.append(entry)
+    return True, results
+
+
+# ----------------------------------------------------------------------------
+# Telegram alerts (tunnel down/up monitor)
+# ----------------------------------------------------------------------------
+
+_alert_runtime = {"last_check": None, "last_event": None, "baseline_done": False}
+_prev_states: dict = {}
+
+
+class AlertConfig:
+    """Telegram alert settings in /etc/vortexl3/alerts.yaml (0600)."""
+
+    def __init__(self, path: Path = None):
+        self.path = Path(path) if path else ALERTS_FILE
+        self._data: dict = {}
+        self._load()
+
+    def _load(self) -> None:
+        if self.path.exists():
+            try:
+                with open(self.path, "r", encoding="utf-8") as f:
+                    self._data = yaml.safe_load(f) or {}
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Could not load alerts config: %s", e)
+                self._data = {}
+
+    def _save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.path, "w", encoding="utf-8") as f:
+            yaml.dump(self._data, f, default_flow_style=False)
+        os.chmod(self.path, 0o600)
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self._data.get("enabled", False))
+
+    @property
+    def configured(self) -> bool:
+        return bool(self._data.get("bot_token") and self._data.get("chat_id"))
+
+    def save_config(self, bot_token: str, chat_id: str, enabled: bool) -> None:
+        bot_token = (bot_token or "").strip()
+        chat_id = (chat_id or "").strip()
+        if not bot_token or not chat_id:
+            raise ValueError("Bot token and chat ID are required")
+        self._data.update({"bot_token": bot_token, "chat_id": chat_id,
+                           "enabled": bool(enabled)})
+        self._save()
+
+
+def send_telegram(bot_token: str, chat_id: str, text: str) -> tuple:
+    """Send a Telegram message via Bot API. Returns (ok, message)."""
+    try:
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            data=json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8"),
+            headers={"Content-Type": "application/json",
+                     "User-Agent": "VortexL3-Panel"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = resp.read().decode("utf-8", "replace")
+            data = json.loads(body) if body else {}
+            if data.get("ok"):
+                return True, "Message sent"
+            return False, f"Telegram API error: {body[:200]}"
+    except Exception as e:  # noqa: BLE001
+        return False, f"Send failed: {e}"
+
+
+def _light_tunnel_states() -> dict:
+    """Fast running-state snapshot {key: bool} for change detection."""
+    states = {}
+    try:
+        if get_mode() == "easytier":
+            from .easytier_manager import EasyTierConfigManager, EasyTierManager
+            for config in EasyTierConfigManager().get_all_tunnels():
+                try:
+                    running, _ = EasyTierManager(config).get_status()
+                except Exception:  # noqa: BLE001
+                    running = False
+                states[f"easytier:{config.name}"] = bool(running)
+        else:
+            for config in ConfigManager().get_all_tunnels():
+                try:
+                    running = TunnelManager(config).check_tunnel_exists()
+                except Exception:  # noqa: BLE001
+                    running = False
+                states[f"l2tpv3:{config.name}"] = bool(running)
+    except Exception:  # noqa: BLE001
+        pass
+    return states
+
+
+def alert_monitor_loop(interval: int = 60) -> None:
+    """Background loop: notify on tunnel down/recovery via Telegram."""
+    global _prev_states
+    while True:
+        try:
+            cfg = AlertConfig()
+            _alert_runtime["last_check"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            if cfg.enabled and cfg.configured:
+                states = _light_tunnel_states()
+                if not _alert_runtime["baseline_done"]:
+                    _prev_states = states
+                    _alert_runtime["baseline_done"] = True
+                else:
+                    for key, running in states.items():
+                        prev = _prev_states.get(key)
+                        if prev is True and running is False:
+                            msg = f"🔴 VortexL3: tunnel {key} is DOWN"
+                            ok, _ = send_telegram(cfg._data["bot_token"], cfg._data["chat_id"], msg)
+                            _alert_runtime["last_event"] = f"{msg} (sent: {ok})"
+                        elif prev is False and running is True:
+                            msg = f"🟢 VortexL3: tunnel {key} recovered"
+                            ok, _ = send_telegram(cfg._data["bot_token"], cfg._data["chat_id"], msg)
+                            _alert_runtime["last_event"] = f"{msg} (sent: {ok})"
+                    _prev_states = states
+            else:
+                _alert_runtime["baseline_done"] = False
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Alert monitor error: %s", e)
+        time.sleep(interval)
+
+
+def alerts_status_api() -> dict:
+    cfg = AlertConfig()
+    return {"enabled": cfg.enabled, "configured": cfg.configured,
+            "chat_id": cfg._data.get("chat_id", "") if cfg.configured else "",
+            "last_check": _alert_runtime["last_check"],
+            "last_event": _alert_runtime["last_event"]}
+
+
+def alerts_config_api(bot_token: str, chat_id: str, enabled: bool) -> tuple:
+    try:
+        AlertConfig().save_config(bot_token, chat_id, enabled)
+        return True, "Alert settings saved"
+    except ValueError as e:
+        return False, str(e)
+    except Exception as e:  # noqa: BLE001
+        return False, f"Error: {e}"
+
+
+def alerts_test_api() -> tuple:
+    cfg = AlertConfig()
+    if not cfg.configured:
+        return False, "Bot token and chat ID are not configured"
+    return send_telegram(cfg._data["bot_token"], cfg._data["chat_id"],
+                         "✅ VortexL3 test alert: notifications are working.")
+
+
+# ----------------------------------------------------------------------------
+# Peer setup card (mirror values for the OTHER server)
+# ----------------------------------------------------------------------------
+
+def _counterpart_ip(ip: str) -> str:
+    """Counterpart host in a /30 or /24 (x.x.x.1 <-> x.x.x.2), else empty."""
+    if not ip:
+        return ""
+    bare = ip.split("/")[0]
+    if not is_valid_ip(bare):
+        return ""
+    head, _, last = bare.rpartition(".")
+    if last == "1":
+        return f"{head}.2"
+    if last == "2":
+        return f"{head}.1"
+    return ""
+
+
+def peer_card_api(name: str) -> tuple:
+    """Mirror settings to enter on the OTHER server of a pair."""
+    name = sanitize_name(name)
+    if not name:
+        return False, "Invalid tunnel name"
+    try:
+        if get_mode() == "easytier":
+            from .easytier_manager import EasyTierConfigManager
+            config = EasyTierConfigManager().get_tunnel(name)
+            if not config:
+                return False, f"Tunnel '{name}' not found"
+            return True, {
+                "tunnel": name,
+                "peer_public_ip": get_server_ip(),
+                "port": config.port,
+                "network_secret": config.network_secret,
+                "network_name": config.network_name,
+                "suggested_tunnel_ip": _counterpart_ip(config.local_ip),
+                "remote_forward_ip": config.local_ip.split("/")[0],
+                "note": "On the other server create a tunnel with these values. "
+                        "Peer Public IP = THIS server.",
+            }
+        config = ConfigManager().get_tunnel(name)
+        if not config:
+            return False, f"Tunnel '{name}' not found"
+        return True, {
+            "tunnel": name,
+            "local_ip": config.remote_ip,
+            "remote_ip": config.local_ip,
+            "interface_ip": _counterpart_ip(config.interface_ip),
+            "tunnel_id": config.peer_tunnel_id,
+            "peer_tunnel_id": config.tunnel_id,
+            "session_id": config.peer_session_id,
+            "peer_session_id": config.session_id,
+            "encap": config.encap_type,
+            "udp_port": config.udp_port,
+            "remote_forward_ip": config.interface_ip.split("/")[0],
+            "note": "On the other server create a tunnel with these mirrored values.",
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Peer card failed")
+        return False, f"Error: {e}"
+
+
+# ----------------------------------------------------------------------------
+# Backup & restore
+# ----------------------------------------------------------------------------
+
+def backup_api() -> tuple:
+    """Export mode + global config + all tunnel/DNS configs as JSON."""
+    try:
+        data = {
+            "app": "vortexl3",
+            "version": __version__,
+            "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "tunnel_mode": get_mode(),
+            "global": {},
+            "tunnels": [],
+            "dns": {},
+        }
+        try:
+            data["global"] = GlobalConfig().to_dict()
+        except Exception:  # noqa: BLE001
+            pass
+        tunnels_dir = TUNNELS_DIR
+        for path in sorted(tunnels_dir.glob("*.yaml")):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = yaml.safe_load(f) or {}
+                data["tunnels"].append({"name": path.stem, "data": content})
+            except Exception as e:  # noqa: BLE001
+                data["tunnels"].append({"name": path.stem, "error": str(e)})
+        try:
+            data["dns"] = dns_manager.get_dns_config()
+        except Exception:  # noqa: BLE001
+            pass
+        return True, data
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Backup failed")
+        return False, f"Error: {e}"
+
+
+def restore_api(payload: dict) -> tuple:
+    """Import tunnels from a backup payload (or a single tunnel entry). Returns (ok, message)."""
+    if not isinstance(payload, dict):
+        return False, "Invalid backup data"
+    tunnels = payload.get("tunnels")
+    if tunnels is None and isinstance(payload.get("data"), dict) and payload.get("name"):
+        tunnels = [payload]  # single tunnel entry
+    if not isinstance(tunnels, list) or not tunnels:
+        return False, "Backup contains no tunnels"
+    if len(tunnels) > 50:
+        return False, "Too many tunnels (max 50)"
+    imported, skipped, errors = [], [], []
+    try:
+        tunnels_dir = TUNNELS_DIR
+        tunnels_dir.mkdir(parents=True, exist_ok=True)
+        for entry in tunnels:
+            try:
+                if not isinstance(entry, dict):
+                    raise ValueError("Invalid tunnel entry")
+                raw_name = str(entry.get("name") or "")
+                name = sanitize_name(raw_name)
+                if not name or name != raw_name.lower():
+                    raise ValueError(f"Invalid tunnel name: {raw_name}")
+                data = entry.get("data")
+                if not isinstance(data, dict):
+                    raise ValueError(f"Tunnel '{name}': missing data")
+                ttype = data.get("tunnel_type", "l2tpv3")
+                if ttype == "easytier":
+                    if not data.get("peer_ip"):
+                        raise ValueError(f"Tunnel '{name}': missing peer_ip")
+                else:
+                    if not data.get("local_ip") or not data.get("remote_ip"):
+                        raise ValueError(f"Tunnel '{name}': missing local_ip/remote_ip")
+                    data["tunnel_type"] = "l2tpv3"
+                target = tunnels_dir / f"{name}.yaml"
+                if target.exists():
+                    skipped.append(name)
+                    continue
+                data["name"] = name
+                with open(target, "w", encoding="utf-8") as f:
+                    yaml.dump(data, f, default_flow_style=False)
+                os.chmod(target, 0o600)
+                imported.append(name)
+            except ValueError as e:
+                errors.append(str(e))
+            except Exception as e:  # noqa: BLE001
+                errors.append(str(e))
+    except Exception as e:  # noqa: BLE001
+        return False, f"Error: {e}"
+    msg = f"Imported: {len(imported)}, skipped (exists): {len(skipped)}"
+    if errors:
+        msg += f", errors: {len(errors)} ({'; '.join(errors[:5])})"
+    msg += ". Restart tunnels to apply."
+    return True, msg
+
+
+# ----------------------------------------------------------------------------
+# One-click update from GitHub
+# ----------------------------------------------------------------------------
+
+_update_proc = None
+_update_lock = threading.Lock()
+
+
+def update_check_api() -> dict:
+    """Compare local version with the latest GitHub release."""
+    latest = None
+    try:
+        req = urllib.request.Request(
+            RELEASES_API, headers={"User-Agent": "VortexL3-Panel",
+                                   "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+            latest = (data.get("tag_name") or "").strip() or None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Update check failed: %s", e)
+    available = bool(latest and latest.lstrip("v") != __version__.lstrip("v"))
+    return {"current": __version__, "latest": latest, "update_available": available}
+
+
+def _update_worker(answer: bytes) -> None:
+    global _update_proc
+    try:
+        UPDATE_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(UPDATE_LOG_FILE, "ab") as log:
+            log.write(f"\n=== VortexL3 update started {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n".encode())
+            proc = subprocess.Popen(
+                ["bash", "-c", f"curl -fsSL {INSTALLER_URL} | bash"],
+                stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            with _update_lock:
+                _update_proc = proc
+            proc.communicate(input=answer)
+            log.write(f"=== Update finished (exit {proc.returncode}) ===\n".encode())
+    except Exception as e:  # noqa: BLE001
+        logger.error("Update failed: %s", e)
+        try:
+            with open(UPDATE_LOG_FILE, "ab") as log:
+                log.write(f"Update failed to start: {e}\n".encode())
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        with _update_lock:
+            _update_proc = None
+
+
+def update_run_api() -> tuple:
+    """Launch the installer in the background (answers tunnel-type prompt)."""
+    with _update_lock:
+        proc = _update_proc
+        if proc is not None and proc.poll() is None:
+            return False, "An update is already running"
+    answer = b"2\n" if get_mode() == "easytier" else b"1\n"
+    thread = threading.Thread(target=_update_worker, args=(answer,), daemon=True)
+    thread.start()
+    return True, "Update started in background. Watch the log."
+
+
+def update_log_api() -> dict:
+    with _update_lock:
+        running = _update_proc is not None and _update_proc.poll() is None
+    lines: list = []
+    try:
+        if UPDATE_LOG_FILE.exists():
+            with open(UPDATE_LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.read().splitlines()[-200:]
+    except Exception:  # noqa: BLE001
+        pass
+    return {"running": running, "log": "\n".join(lines)}
+
+
+# ----------------------------------------------------------------------------
 # HTTP layer
 # ----------------------------------------------------------------------------
 
@@ -1071,11 +1610,14 @@ class PanelHandler(BaseHTTPRequestHandler):
                 })
             elif path == "/api/panel/info":
                 cfg = self.server.panel_config
+                scheme = "https" if getattr(self.server, "tls_enabled", False) else "http"
                 _json_response(self, 200, {
                     "ok": True,
-                    "url": f"http://{get_server_ip()}:{cfg.port}",
+                    "url": f"{scheme}://{get_server_ip()}:{cfg.port}",
                     "username": cfg.username,
                     "port": cfg.port,
+                    "https": cfg.https_enabled,
+                    "tls_active": getattr(self.server, "tls_enabled", False),
                     "version": __version__,
                 })
             elif path == "/api/logs":
@@ -1097,6 +1639,34 @@ class PanelHandler(BaseHTTPRequestHandler):
                 _json_response(self, 200, {"ok": True, **dns_status_api()})
             elif path == "/api/dns/scan":
                 _json_response(self, 200, {"ok": True, **dns_scan_state_api()})
+            elif path == "/api/stats":
+                _json_response(self, 200, {"ok": True, "traffic": traffic_stats_api()})
+            elif path == "/api/alerts/status":
+                _json_response(self, 200, {"ok": True, **alerts_status_api()})
+            elif path == "/api/peer/card":
+                query = parse_qs(parsed.query)
+                ok, result = peer_card_api(query.get("name", [""])[0])
+                _json_response(self, 200 if ok else 400,
+                               {"ok": ok, **({"card": result} if ok else {"error": result})})
+            elif path == "/api/backup":
+                ok, result = backup_api()
+                if not ok:
+                    _json_response(self, 500, {"ok": False, "error": result})
+                else:
+                    body = json.dumps(result, indent=2).encode("utf-8")
+                    stamp = time.strftime("%Y%m%d-%H%M%S")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Content-Disposition",
+                                     f"attachment; filename=vortexl3-backup-{stamp}.json")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(body)
+            elif path == "/api/update/check":
+                _json_response(self, 200, {"ok": True, **update_check_api()})
+            elif path == "/api/update/log":
+                _json_response(self, 200, {"ok": True, **update_log_api()})
             else:
                 _json_response(self, 404, {"ok": False, "error": "Not found"})
         except Exception as e:  # noqa: BLE001
@@ -1168,6 +1738,27 @@ class PanelHandler(BaseHTTPRequestHandler):
                 _json_response(self, *self._change_password(data))
             elif path == "/api/panel/port":
                 _json_response(self, *self._change_port(data))
+            elif path == "/api/panel/https":
+                _json_response(self, *self._change_https(data))
+            elif path == "/api/ping":
+                ok, result = ping_tunnel_api(data.get("name", ""))
+                _json_response(self, 200 if ok else 400,
+                               {"ok": ok, **({"results": result} if ok else {"error": result})})
+            elif path == "/api/alerts/config":
+                ok, msg = alerts_config_api(data.get("bot_token", ""),
+                                            data.get("chat_id", ""),
+                                            bool(data.get("enabled", False)))
+                _json_response(self, 200 if ok else 400, {"ok": ok, "message": msg})
+            elif path == "/api/alerts/test":
+                ok, msg = alerts_test_api()
+                _json_response(self, 200 if ok else 400, {"ok": ok, "message": msg})
+            elif path == "/api/restore":
+                payload = data.get("backup") if isinstance(data.get("backup"), dict) else data
+                ok, msg = restore_api(payload)
+                _json_response(self, 200 if ok else 400, {"ok": ok, "message": msg})
+            elif path == "/api/update/run":
+                ok, msg = update_run_api()
+                _json_response(self, 200 if ok else 400, {"ok": ok, "message": msg})
             else:
                 _json_response(self, 404, {"ok": False, "error": "Not found"})
         except Exception as e:  # noqa: BLE001
@@ -1242,6 +1833,30 @@ class PanelHandler(BaseHTTPRequestHandler):
                      "message": f"Port changed to {port}. Panel is restarting...",
                      "reconnect_url": reconnect}
 
+    def _change_https(self, data: dict):
+        """Toggle HTTPS (restarts service afterwards). Returns (http_code, obj)."""
+        cfg = self.server.panel_config
+        enabled = bool(data.get("enabled", False))
+        if enabled and not tls_ready():
+            ok, msg = ensure_tls_cert()
+            if not ok:
+                return 400, {"ok": False,
+                             "error": f"Cannot enable HTTPS: {msg}. Is openssl installed?"}
+        cfg.set_https(enabled)
+        scheme = "https" if (enabled and tls_ready()) else "http"
+        reconnect = f"{scheme}://{get_server_ip()}:{cfg.port}"
+
+        def _delayed_restart():
+            time.sleep(2)
+            run_command(f"systemctl restart {PANEL_SERVICE}")
+
+        threading.Thread(target=_delayed_restart, daemon=True).start()
+        note = "" if scheme == "https" else " (TLS certificate missing - install openssl)"
+        return 200, {"ok": True,
+                     "message": f"HTTPS {'enabled' if enabled else 'disabled'}{note}. "
+                                "Panel is restarting...",
+                     "reconnect_url": reconnect}
+
     def _handle_login(self) -> None:
         if not self._login_allowed():
             _json_response(self, 429, {"ok": False, "error": "Too many attempts, try later"})
@@ -1280,7 +1895,19 @@ class PanelServer(ThreadingHTTPServer):
 
     def __init__(self, host: str, port: int, panel_config: PanelConfig):
         self.panel_config = panel_config
+        self.tls_enabled = False
         super().__init__((host, port), PanelHandler)
+
+    def enable_tls(self) -> tuple:
+        """Wrap the listening socket with the panel TLS certificate."""
+        try:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(str(TLS_CERT_FILE), str(TLS_KEY_FILE))
+            self.socket = context.wrap_socket(self.socket, server_side=True)
+            self.tls_enabled = True
+            return True, "TLS enabled"
+        except Exception as e:  # noqa: BLE001
+            return False, f"TLS failed: {e}"
 
 
 # ----------------------------------------------------------------------------
@@ -1316,13 +1943,29 @@ def main() -> int:
         logger.error("Cannot bind panel port %s: %s", port, e)
         return 1
 
-    url = f"http://{get_server_ip()}:{port}"
+    use_tls = bool(config.https_enabled)
+    if use_tls and not tls_ready():
+        ok, msg = ensure_tls_cert()
+        if not ok:
+            logger.warning("HTTPS requested but %s - falling back to HTTP", msg)
+            use_tls = False
+    if use_tls:
+        ok, msg = server.enable_tls()
+        if not ok:
+            logger.warning("%s - falling back to HTTP", msg)
+
+    scheme = "https" if server.tls_enabled else "http"
+    url = f"{scheme}://{get_server_ip()}:{port}"
     logger.info("VortexL3 Web Panel listening on %s (user: %s)", url, username)
     print(f"VortexL3 Web Panel: {url}  user: {username}", flush=True)
     if is_new and password:
         logger.info("Panel credentials - username: %s password: %s", username, password)
         print(f"Panel username: {username}", flush=True)
         print(f"Panel password: {password}", flush=True)
+
+    # Telegram down/up monitor (acts only when configured + enabled)
+    monitor = threading.Thread(target=alert_monitor_loop, kwargs={"interval": 60}, daemon=True)
+    monitor.start()
 
     try:
         server.serve_forever()

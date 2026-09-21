@@ -206,6 +206,38 @@ select{max-width:100%}
           </div>
           <div id="logview" class="logview">Select a service and hit LOAD.</div>
         </div></div>
+      <div class="tun"><div class="tun-head"><span class="tname">TELEGRAM ALERTS</span></div>
+        <div class="tun-body">
+          <div class="kv" id="tgbox"></div>
+          <label>BOT TOKEN</label><input id="tg-token" type="password" placeholder="123456:ABC-...">
+          <label>CHAT ID</label><input id="tg-chat" placeholder="123456789">
+          <div class="rowbtns">
+            <button class="btn pink" onclick="tgSave(true)">ENABLE &amp; SAVE ▸</button>
+            <button class="btn ghost" onclick="tgSave(false)">SAVE (DISABLED)</button>
+            <button class="btn ghost" onclick="tgTest()">SEND TEST ▸</button>
+            <button class="btn ghost" onclick="loadTg()">REFRESH</button>
+          </div>
+          <div class="hint">Create a bot via @BotFather, then send it one message and get your chat ID via @userinfobot. Alerts fire when a tunnel goes down / recovers.</div>
+        </div></div>
+      <div class="tun"><div class="tun-head"><span class="tname">BACKUP &amp; RESTORE</span></div>
+        <div class="tun-body">
+          <div class="rowbtns">
+            <button class="btn" onclick="doBackup()">DOWNLOAD BACKUP ▸</button>
+          </div>
+          <label>RESTORE FROM FILE (new tunnels only, existing names are skipped)</label>
+          <input id="restore-file" type="file" accept=".json,application/json">
+          <div class="rowbtns"><button class="btn pink" onclick="doRestore()">RESTORE ▸</button></div>
+        </div></div>
+      <div class="tun"><div class="tun-head"><span class="tname">UPDATE FROM GITHUB</span></div>
+        <div class="tun-body">
+          <div class="kv" id="updbox"></div>
+          <div class="rowbtns">
+            <button class="btn ghost" onclick="checkUpdate()">CHECK ▸</button>
+            <button class="btn pink" onclick="runUpdate()">UPDATE NOW ▸</button>
+            <button class="btn ghost" onclick="updateLog()">VIEW LOG</button>
+          </div>
+          <div id="updlog" class="logview hidden"></div>
+        </div></div>
     </div>
 
     <div id="sec-network" class="hidden">
@@ -250,6 +282,16 @@ select{max-width:100%}
       <div class="tun"><div class="tun-head"><span class="tname">ACCESS</span></div>
         <div class="tun-body"><div class="kv" id="panelbox"></div>
           <div class="rowbtns"><button class="btn ghost" onclick="loadPanelInfo()">REFRESH</button></div>
+        </div></div>
+      <div class="tun"><div class="tun-head"><span class="tname">HTTPS</span></div>
+        <div class="tun-body">
+          <div class="kv" id="httpsbox"></div>
+          <div class="hint">Self-signed certificate (browser will show a warning — accept it). Changing restarts the panel.</div>
+          <div class="rowbtns">
+            <button class="btn pink" onclick="setHttps(true)">ENABLE HTTPS ▸</button>
+            <button class="btn danger" onclick="setHttps(false)">DISABLE (HTTP)</button>
+          </div>
+          <div id="https-reconnect" class="hidden" style="margin-top:10px"></div>
         </div></div>
       <div class="tun"><div class="tun-head"><span class="tname">CHANGE PASSWORD</span></div>
         <div class="tun-body">
@@ -340,6 +382,19 @@ select{max-width:100%}
   </div>
 </div>
 
+<!-- PEER CARD MODAL -->
+<div class="modal" id="modal-peer">
+  <div class="sheet">
+    <h2>PEER SETUP CARD</h2>
+    <div class="hint" id="peer-sub">Enter these values on the OTHER server.</div>
+    <div id="peercard" class="logview" style="color:var(--txt)">loading…</div>
+    <div class="rowbtns">
+      <button class="btn" onclick="copyPeer()">COPY ▸</button>
+      <button class="btn ghost" onclick="closePeer()">CLOSE</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -417,11 +472,14 @@ async function refresh(){
           <div class="kv">${kv}</div>
           ${peers?`<div class="peers">PEERS<br>${peers}</div>`:''}
           <div class="fwds">FORWARDS<br>${fw}</div>
+          <div class="fwds" id="traf-${esc(x.name)}">TRAFFIC<br><span class="hint">loading…</span></div>
           <div class="rowbtns">
             <button class="btn" onclick="act('${esc(x.name)}','start')">START</button>
             <button class="btn" onclick="act('${esc(x.name)}','restart')">RESTART</button>
             <button class="btn" onclick="act('${esc(x.name)}','stop')">STOP</button>
             <button class="btn pink" onclick="openFw('${esc(x.name)}')">FORWARDS</button>
+            <button class="btn ghost" onclick="pingTest('${esc(x.name)}')">PING TEST</button>
+            <button class="btn ghost" onclick="openPeer('${esc(x.name)}')">PEER CARD</button>
             <button class="btn danger" onclick="del('${esc(x.name)}')">DELETE</button>
           </div>
         </div>`;
@@ -487,7 +545,7 @@ function showTab(n,btn){
     document.getElementById('sec-'+x).classList.toggle('hidden',x!==n));
   document.querySelectorAll('#tabs .tab').forEach(b=>b.classList.remove('active'));
   if(btn)btn.classList.add('active');
-  if(n==='system'){loadHealth();}
+  if(n==='system'){loadHealth();loadTg();}
   if(n==='network'){loadMode();loadCron();loadTcp();loadDns();}
   if(n==='panel'){loadPanelInfo();}
 }
@@ -633,6 +691,19 @@ async function loadPanelInfo(){
     document.getElementById('panelbox').innerHTML=
       `<div>URL <b>${esc(r.url)}</b></div><div>USERNAME <b>${esc(r.username)}</b></div>
        <div>PORT <b>${esc(r.port)}</b></div><div>VERSION <b>${esc(r.version)}</b></div>`;
+    document.getElementById('httpsbox').innerHTML=
+      `<div>STATUS <b>${r.tls_active?'HTTPS ✓ ACTIVE':(r.https?'HTTPS (applies after restart)':'HTTP')}</b></div>
+       <div>URL <b>${esc(r.url)}</b></div>`;
+  }catch(err){toast(err.message,false);}
+}
+async function setHttps(on){
+  if(!confirm((on?'Enable HTTPS (self-signed cert)?':'Disable HTTPS (plain HTTP)?')+' Panel will restart.'))return;
+  try{const r=await api('/api/panel/https',{enabled:on});
+    if(r.ok){document.getElementById('https-reconnect').classList.remove('hidden');
+      document.getElementById('https-reconnect').innerHTML=
+        `Panel restarting… reconnect in ~10s: <a href="${esc(r.reconnect_url)}">${esc(r.reconnect_url)}</a>`;
+      toast('Restarting panel …',true);
+    }else toast(r.message||r.error||'failed',false);
   }catch(err){toast(err.message,false);}
 }
 async function changePw(){
@@ -652,6 +723,102 @@ async function changePort(){
         `Panel restarting… reconnect in ~10s: <a href="${esc(r.reconnect_url)}">${esc(r.reconnect_url)}</a>`;
       toast('Restarting panel …',true);
     }else toast(r.message||r.error||'failed',false);
+  }catch(err){toast(err.message,false);}
+}
+/* ---- tunnels: traffic + ping + peer card ---- */
+function fmtBytes(b){if(b>=1e9)return (b/1e9).toFixed(2)+' GB';
+  if(b>=1e6)return (b/1e6).toFixed(2)+' MB';if(b>=1e3)return (b/1e3).toFixed(1)+' KB';return b+' B';}
+async function loadStats(){
+  if(document.getElementById('view-dash').classList.contains('hidden'))return;
+  if(document.getElementById('sec-tunnels').classList.contains('hidden'))return;
+  try{const r=await api('/api/stats');
+    if(!r.ok)return;
+    (r.traffic||[]).forEach(t=>{
+      const el=document.getElementById('traf-'+CSS.escape(t.name));
+      if(el)el.innerHTML=`TRAFFIC<br>▼ ${fmtBytes(t.rx_bytes)} (${t.rx_mbps} Mbps) · ▲ ${fmtBytes(t.tx_bytes)} (${t.tx_mbps} Mbps)${t.errors?` · <span style="color:var(--red)">ERR ${t.errors}</span>`:''}`;
+    });
+  }catch(e){}
+}
+setInterval(loadStats,4000);
+async function pingTest(name){
+  toast('Pinging from '+name+' …');
+  try{const r=await api('/api/ping',{name});
+    if(!r.ok){toast(r.error||'failed',false);return;}
+    const lines=r.results.map(x=>`${x.label} ${x.ip}: ${x.ok?'✓': '✗'} avg=${x.avg_ms==null?'-':x.avg_ms+'ms'} loss=${x.loss_pct}%`);
+    log('[PING] '+name+'\n'+lines.join('\n'));
+    toast(r.results.every(x=>x.ok)?'Peer reachable ✓':'Peer unreachable ✗',r.results.every(x=>x.ok));
+  }catch(err){toast(err.message,false);}
+}
+async function openPeer(name){
+  document.getElementById('peer-sub').textContent='Tunnel "'+name+'" — enter these on the OTHER server.';
+  document.getElementById('peercard').textContent='loading…';
+  document.getElementById('modal-peer').classList.add('open');
+  try{const r=await api('/api/peer/card?name='+encodeURIComponent(name));
+    if(!r.ok){document.getElementById('peercard').textContent='Error: '+(r.error||'failed');return;}
+    document.getElementById('peercard').textContent=
+      Object.entries(r.card).map(([k,v])=>k+': '+v).join('\n');
+  }catch(err){document.getElementById('peercard').textContent='Error: '+err.message;}
+}
+function closePeer(){document.getElementById('modal-peer').classList.remove('open');}
+function copyPeer(){navigator.clipboard.writeText(document.getElementById('peercard').textContent)
+  .then(()=>toast('Copied ✓')).catch(()=>toast('Copy failed',false));}
+/* ---- system: telegram ---- */
+async function loadTg(){
+  try{const r=await api('/api/alerts/status');
+    if(!r.ok)return;
+    document.getElementById('tgbox').innerHTML=
+      `<div>STATUS <b>${r.enabled?'ENABLED':'DISABLED'}</b></div>
+       <div>CONFIGURED <b>${r.configured?'YES ('+esc(r.chat_id)+')':'NO'}</b></div>
+       <div>LAST CHECK <b>${esc(r.last_check||'-')}</b></div>
+       <div>LAST EVENT <b>${esc(r.last_event||'-')}</b></div>`;
+    if(r.configured)document.getElementById('tg-chat').value=r.chat_id;
+  }catch(err){toast(err.message,false);}
+}
+async function tgSave(on){
+  const t=document.getElementById('tg-token').value.trim(),
+        c=document.getElementById('tg-chat').value.trim();
+  try{const r=await api('/api/alerts/config',{bot_token:t,chat_id:c,enabled:on});
+    toast(r.message||'done',r.ok);loadTg();
+  }catch(err){toast(err.message,false);}
+}
+async function tgTest(){
+  try{const r=await api('/api/alerts/test',{});toast(r.message||'done',r.ok);
+  }catch(err){toast(err.message,false);}
+}
+/* ---- system: backup/restore/update ---- */
+function doBackup(){window.location='/api/backup';toast('Backup downloading …');}
+async function doRestore(){
+  const f=document.getElementById('restore-file').files[0];
+  if(!f){toast('Select a backup file first',false);return;}
+  try{const data=JSON.parse(await f.text());
+    const r=await api('/api/restore',data);
+    log('[RESTORE]\n'+(r.message||r.error||''));toast(r.ok?'Restored ✓':'Failed ✗',r.ok);refresh();
+  }catch(err){toast('Invalid backup file: '+err.message,false);}
+}
+async function checkUpdate(){
+  try{const r=await api('/api/update/check');
+    if(!r.ok)return;
+    document.getElementById('updbox').innerHTML=
+      `<div>CURRENT <b>${esc(r.current)}</b></div>
+       <div>LATEST <b>${esc(r.latest||'unknown (offline?)')}</b></div>
+       <div>STATUS <b>${r.update_available?'UPDATE AVAILABLE ★':'UP TO DATE ✓'}</b></div>`;
+    toast(r.update_available?'Update available ★':'Up to date ✓',!r.update_available?true:undefined);
+  }catch(err){toast(err.message,false);}
+}
+async function runUpdate(){
+  if(!confirm('Run the installer update now? Services will restart.'))return;
+  try{const r=await api('/api/update/run',{});toast(r.message||'done',r.ok);updateLog(true);
+  }catch(err){toast(err.message,false);}
+}
+let UPD_TIMER=null;
+async function updateLog(auto){
+  const box=document.getElementById('updlog');box.classList.remove('hidden');
+  try{const r=await api('/api/update/log');
+    box.textContent=r.log||'(empty)';
+    clearInterval(UPD_TIMER);
+    if(r.running||auto){UPD_TIMER=setInterval(async()=>{
+      try{const q=await api('/api/update/log');box.textContent=q.log||'(empty)';
+        if(!q.running)clearInterval(UPD_TIMER);}catch(e){clearInterval(UPD_TIMER);}},3000);}
   }catch(err){toast(err.message,false);}
 }
 refresh().catch(()=>{});

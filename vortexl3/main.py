@@ -677,7 +677,8 @@ def handle_web_panel_menu():
     """Handle Web Panel management menu (enable, credentials, port, status)."""
     from vortexl3.web_panel import (
         PanelConfig, get_server_ip, find_free_port, is_port_free,
-        ensure_panel_firewall, PANEL_SERVICE,
+        ensure_panel_firewall, ensure_tls_cert, panel_url_for_config,
+        PANEL_SERVICE,
     )
 
     def service_active() -> bool:
@@ -688,7 +689,7 @@ def handle_web_panel_menu():
         return result.returncode == 0 and "active" in (result.stdout or "")
 
     def show_access(cfg: PanelConfig, password=None):
-        url = f"http://{get_server_ip()}:{cfg.port}"
+        url = panel_url_for_config(cfg)
         ui.console.print()
         ui.console.print(f"[bold white]Panel URL:[/] [bold cyan]{url}[/]")
         ui.console.print(f"[bold white]Username:[/] [bold yellow]{cfg.username}[/]")
@@ -700,6 +701,7 @@ def handle_web_panel_menu():
             ui.console.print("[dim]Password is stored hashed and cannot be shown. "
                              "Use option 4 to regenerate.[/]")
         ui.console.print(f"[bold white]Port:[/] {cfg.port}  |  "
+                         f"[bold white]HTTPS:[/] {'[green]On[/]' if cfg.https_enabled else '[yellow]Off[/]'}  |  "
                          f"[bold white]Service:[/] {'[green]Active[/]' if service_active() else '[red]Stopped[/]'}")
 
     while True:
@@ -719,6 +721,7 @@ def handle_web_panel_menu():
         ui.console.print("[bold cyan][4][/] Regenerate Username & Password")
         ui.console.print("[bold cyan][5][/] Change Port (random free)")
         ui.console.print("[bold cyan][6][/] Show Access Info")
+        ui.console.print("[bold cyan][7][/] Toggle HTTPS")
         ui.console.print("[bold cyan][0][/] Back")
 
         choice = ui.Prompt.ask("\n[bold cyan]Select option[/]", default="0")
@@ -731,6 +734,10 @@ def handle_web_panel_menu():
                 cfg.set_port(find_free_port())
                 ui.show_warning(f"Port was busy, switched to {cfg.port}")
             ensure_panel_firewall(cfg.port)
+            if cfg.https_enabled:
+                ok, msg = ensure_tls_cert()
+                if not ok:
+                    ui.show_warning(f"HTTPS cert issue ({msg}) - panel will use HTTP")
             subprocess.run(f"systemctl enable {PANEL_SERVICE}",
                            shell=True, capture_output=True)
             subprocess.run(f"systemctl restart {PANEL_SERVICE}",
@@ -782,6 +789,27 @@ def handle_web_panel_menu():
                 ui.show_error("Panel is not set up yet. Use Enable first.")
             else:
                 show_access(cfg)
+            ui.wait_for_enter()
+        elif choice == "7":
+            if not cfg.exists:
+                ui.show_error("Panel is not set up yet. Use Enable first.")
+            elif cfg.https_enabled:
+                cfg.set_https(False)
+                subprocess.run(f"systemctl restart {PANEL_SERVICE}", shell=True, capture_output=True)
+                ui.show_success("HTTPS disabled (plain HTTP)")
+                show_access(cfg)
+            else:
+                ok, msg = ensure_tls_cert()
+                if not ok:
+                    ui.show_error(f"Cannot enable HTTPS: {msg}")
+                else:
+                    cfg.set_https(True)
+                    subprocess.run(f"systemctl restart {PANEL_SERVICE}",
+                                   shell=True, capture_output=True)
+                    ui.show_success("HTTPS enabled with self-signed certificate!")
+                    ui.console.print("[dim]Browsers will show a warning for self-signed "
+                                     "certs - accept it to continue.[/]")
+                    show_access(cfg)
             ui.wait_for_enter()
         else:
             ui.show_warning("Invalid option")
